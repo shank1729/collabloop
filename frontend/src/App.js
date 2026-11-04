@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import "./App.css";
 import AuthScreen from "./components/AuthScreen";
 import DocumentEditor from "./components/DocumentEditor";
@@ -26,9 +26,13 @@ function App() {
     setAuthMessage("");
   };
 
-  useEffect(() => {
-    const handleSessionExpired = () => {
-      clearSession();
+  // Subscribe before child passive effects can report an already-expired token.
+  useLayoutEffect(() => {
+    const handleSessionExpired = (event) => {
+      const expiredToken = event.detail?.token;
+      if (expiredToken && expiredToken !== session?.token) return;
+      // Another tab may have signed in more recently using the same storage key.
+      if (!expiredToken || getStoredSession()?.token === expiredToken) clearSession();
       setSession(null);
       setAuthMessage("Your session expired. Please sign in again.");
     };
@@ -39,7 +43,7 @@ function App() {
     return () => {
       window.removeEventListener(eventName, handleSessionExpired);
     };
-  }, []);
+  }, [session?.token]);
 
   return (
     <div className="app-shell">

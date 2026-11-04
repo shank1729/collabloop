@@ -1,0 +1,16 @@
+# This Dockerfile builds only the backend.
+frontend
+target
+**/node_modules
+**/build
+**/coverage
+.git
+.codex
+.agents
+**/.aws
+**/.env
+**/.env.*
+**/*.log
+**/.idea
+**/.settings
+**/.vscode

@@ -6,6 +6,9 @@ import org.springframework.context.event.EventListener;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.messaging.SessionDisconnectEvent;
+import com.realtimecollab.dto.DocumentAccessChangedEvent;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 @Component
 public class WebSocketPresenceEventListener {
@@ -21,13 +24,21 @@ public class WebSocketPresenceEventListener {
 
     @EventListener
     public void handleDisconnect(SessionDisconnectEvent event) {
-        DocumentPresenceResponse response = presenceService.leave(event.getSessionId());
+        presenceService.leave(event.getSessionId());
+    }
 
-        if (response != null) {
-            messagingTemplate.convertAndSend(
-                    "/topic/documents/" + response.getDocumentId() + "/presence",
-                    response
-            );
-        }
+    @EventListener
+    public void presenceChanged(DocumentPresenceResponse response) {
+        messagingTemplate.convertAndSend("/topic/documents/" + response.getDocumentId() + "/presence", response);
+    }
+
+    @Scheduled(fixedDelay = 1000)
+    public void expirePresence() {
+        presenceService.expireStaleSessions();
+    }
+
+    @TransactionalEventListener
+    public void accessChanged(DocumentAccessChangedEvent event) {
+        presenceService.accessChanged(event.documentId(), event.email(), event.role());
     }
 }

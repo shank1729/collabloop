@@ -1,13 +1,18 @@
 package com.realtimecollab.service;
 
 import com.realtimecollab.dto.ShareDocumentRequest;
+import com.realtimecollab.dto.DocumentPatchRequest;
 import com.realtimecollab.dto.auth.RegisterRequest;
 import com.realtimecollab.entity.Document;
 import com.realtimecollab.entity.DocumentRole;
-import com.realtimecollab.exception.BadRequestException;
+import org.springframework.security.access.AccessDeniedException;
 import com.realtimecollab.exception.ResourceNotFoundException;
 import com.realtimecollab.repository.DocumentVersionRepository;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import jakarta.persistence.EntityManager;
+import java.time.LocalDateTime;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
@@ -29,6 +34,9 @@ class DocumentServiceTest {
 
     @Autowired
     private DocumentVersionRepository documentVersionRepository;
+
+    @Autowired
+    private EntityManager entityManager;
 
     @Test
     void createStoresOwnerAndVersionSnapshot() {
@@ -123,7 +131,7 @@ class DocumentServiceTest {
 
         assertThatThrownBy(() ->
                 documentService.shareDocument(savedDocument.getId(), shareRequest("third@example.com"), "collab@example.com"))
-                .isInstanceOf(BadRequestException.class)
+                .isInstanceOf(AccessDeniedException.class)
                 .hasMessage("Only the document owner can share this document.");
     }
 
@@ -141,7 +149,7 @@ class DocumentServiceTest {
                 .isEqualTo("Original");
         assertThatThrownBy(() ->
                 documentService.update(savedDocument.getId(), document("Read Only Plan", "Changed"), "viewer@example.com"))
-                .isInstanceOf(BadRequestException.class)
+                .isInstanceOf(AccessDeniedException.class)
                 .hasMessage("Only document owners and editors can edit this document.");
     }
 
@@ -179,6 +187,48 @@ class DocumentServiceTest {
                 .hasSize(2)
                 .extracting("contentSnapshot")
                 .contains("Version one", "Version two");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"put", "patch", "socket"})
+    void snapshotsUsePersistedVersionAndTimestampAndPreserveOlderContent(String path) {
+        register("Owner", "owner@example.com");
+        Document original = documentService.create(document("Notes", "Version one"), "owner@example.com");
+        Long id = original.getId();
+        Long initialVersion = original.getVersion();
+        if (path.equals("put")) {
+            documentService.update(id, document("Notes", "Version two"), "owner@example.com");
+        } else if (path.equals("patch")) {
+            var request = new DocumentPatchRequest();
+            request.setContent("Version two");
+            documentService.patch(id, request, "owner@example.com");
+        } else {
+            documentService.updateDocumentContent(id, "Version two", "owner@example.com");
+        }
+        entityManager.flush();
+        entityManager.clear();
+        Document persisted = documentService.getById(id, "owner@example.com");
+        var versions = documentVersionRepository.findByDocumentIdOrderByEditedAtDesc(id);
+        assertThat(versions).hasSize(2);
+        assertThat(persisted.getVersion()).isGreaterThan(initialVersion);
+        assertThat(versions.get(0).getDocumentVersionNumber()).isEqualTo(persisted.getVersion());
+        assertThat(versions.get(0).getEditedAt()).isEqualTo(persisted.getUpdatedAt());
+        assertThat(versions.get(0).getContentSnapshot()).isEqualTo("Version two");
+        assertThat(versions.get(1).getContentSnapshot()).isEqualTo("Version one");
+        assertThat(versions.get(1).getDocumentVersionNumber()).isEqualTo(initialVersion);
+    }
+
+    @Test
+    void snapshotOrderingUsesIdToBreakTimestampTies() {
+        register("Owner", "owner@example.com");
+        Document document = documentService.create(document("Notes", "First"), "owner@example.com");
+        documentService.updateDocumentContent(document.getId(), "Second", "owner@example.com");
+        var versions = documentVersionRepository.findByDocumentIdOrderByEditedAtDesc(document.getId());
+        versions.forEach(version -> version.setEditedAt(LocalDateTime.of(2026, 10, 31, 10, 0)));
+        documentVersionRepository.saveAllAndFlush(versions);
+        entityManager.clear();
+        assertThat(documentVersionRepository.findByDocumentIdOrderByEditedAtDesc(document.getId()))
+                .extracting("contentSnapshot").containsExactly("Second", "First");
     }
 
     private void register(String name, String email) {

@@ -10,10 +10,12 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.springframework.boot.SpringApplication;
+import org.springframework.boot.context.config.ConfigDataEnvironmentPostProcessor;
 import org.springframework.boot.env.EnvironmentPostProcessor;
 import org.springframework.core.Ordered;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.MapPropertySource;
+import org.springframework.core.env.Profiles;
 
 public class DatabaseUrlEnvironmentPostProcessor implements EnvironmentPostProcessor, Ordered {
 
@@ -21,6 +23,10 @@ public class DatabaseUrlEnvironmentPostProcessor implements EnvironmentPostProce
 
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
+        // A developer's cloud URL must not replace the test profile's disposable database.
+        if (environment.acceptsProfiles(Profiles.of("test"))) {
+            return;
+        }
         String databaseUrl = firstNonBlank(
                 environment.getProperty("DATABASE_URL"),
                 environment.getProperty("DB_URL"));
@@ -32,7 +38,7 @@ public class DatabaseUrlEnvironmentPostProcessor implements EnvironmentPostProce
 
     @Override
     public int getOrder() {
-        return Ordered.HIGHEST_PRECEDENCE;
+        return ConfigDataEnvironmentPostProcessor.ORDER + 1;
     }
 
     static Optional<Map<String, Object>> toSpringDatasourceProperties(String databaseUrl) {

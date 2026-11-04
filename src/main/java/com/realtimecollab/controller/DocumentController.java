@@ -101,4 +101,13 @@ public class DocumentController {
                 mapper.toResponse(service.shareDocument(id, request, authentication.getName()))
         );
     }
+
+    @DeleteMapping("/{id}/collaborators/{userId}")
+    public ResponseEntity<DocumentResponse> removeCollaborator(
+            @PathVariable Long id,
+            @PathVariable Long userId,
+            Authentication authentication) {
+        return ResponseEntity.ok(mapper.toResponse(
+                service.removeCollaborator(id, userId, authentication.getName())));
+    }
 }

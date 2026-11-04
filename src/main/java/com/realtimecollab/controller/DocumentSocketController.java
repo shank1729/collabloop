@@ -1,7 +1,6 @@
 package com.realtimecollab.controller;
 
 import com.realtimecollab.dto.DocumentEditMessage;
-import com.realtimecollab.dto.DocumentPresenceResponse;
 import com.realtimecollab.dto.DocumentSocketMessage;
 import com.realtimecollab.entity.Document;
 import com.realtimecollab.mapper.DocumentMapper;
@@ -55,11 +54,11 @@ public class DocumentSocketController {
             SimpMessageHeaderAccessor headerAccessor,
             Principal principal) {
         requirePrincipal(principal);
-        broadcastPresence(documentId, presenceService.join(
+        presenceService.join(
                 documentId,
                 headerAccessor.getSessionId(),
                 principal.getName()
-        ));
+        );
     }
 
     @MessageMapping("/documents/{documentId}/presence/typing")
@@ -68,11 +67,11 @@ public class DocumentSocketController {
             SimpMessageHeaderAccessor headerAccessor,
             Principal principal) {
         requirePrincipal(principal);
-        broadcastPresence(documentId, presenceService.markTyping(
+        presenceService.markTyping(
                 documentId,
                 headerAccessor.getSessionId(),
                 principal.getName()
-        ));
+        );
     }
 
     @MessageMapping("/documents/{documentId}/presence/viewing")
@@ -81,15 +80,23 @@ public class DocumentSocketController {
             SimpMessageHeaderAccessor headerAccessor,
             Principal principal) {
         requirePrincipal(principal);
-        broadcastPresence(documentId, presenceService.markViewing(
+        presenceService.markViewing(
                 documentId,
                 headerAccessor.getSessionId(),
                 principal.getName()
-        ));
+        );
     }
 
-    private void broadcastPresence(Long documentId, DocumentPresenceResponse response) {
-        messagingTemplate.convertAndSend("/topic/documents/" + documentId + "/presence", response);
+    @MessageMapping("/documents/{documentId}/presence/heartbeat")
+    public void heartbeat(@DestinationVariable Long documentId, SimpMessageHeaderAccessor headers, Principal principal) {
+        requirePrincipal(principal);
+        presenceService.heartbeat(documentId, headers.getSessionId(), principal.getName());
+    }
+
+    @MessageMapping("/documents/{documentId}/presence/leave")
+    public void leave(@DestinationVariable Long documentId, SimpMessageHeaderAccessor headers, Principal principal) {
+        requirePrincipal(principal);
+        presenceService.leave(documentId, headers.getSessionId());
     }
 
     private void requirePrincipal(Principal principal) {

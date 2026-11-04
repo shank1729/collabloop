@@ -1,6 +1,7 @@
 package com.realtimecollab.service;
 
 import com.realtimecollab.dto.DocumentPatchRequest;
+import com.realtimecollab.dto.DocumentAccessChangedEvent;
 import com.realtimecollab.dto.ShareDocumentRequest;
 import com.realtimecollab.entity.DocumentAccess;
 import com.realtimecollab.entity.Document;
@@ -14,6 +15,8 @@ import com.realtimecollab.repository.DocumentVersionRepository;
 import com.realtimecollab.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
@@ -24,32 +27,38 @@ public class DocumentService {
     private final DocumentRepository repo;
     private final DocumentVersionRepository documentVersionRepository;
     private final UserRepository userRepository;
+    private final ApplicationEventPublisher events;
     @Autowired
     public DocumentService(
             DocumentRepository repo,
             DocumentVersionRepository documentVersionRepository,
-            UserRepository userRepository) {
+            UserRepository userRepository,
+            ApplicationEventPublisher events) {
         this.repo = repo;
         this.documentVersionRepository = documentVersionRepository;
         this.userRepository = userRepository;
+        this.events = events;
     }
 
+    @Transactional(readOnly = true)
     public List<Document> getAll(String email) {
         User user = getUserByEmail(email);
         return repo.findAllAccessibleByUserId(user.getId());
     }
 
+    @Transactional(readOnly = true)
     public Document getById(Long id, String email) {
         User user = getUserByEmail(email);
         return repo.findAccessibleByIdAndUserId(id, user.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Document not found with id: " + id));
     }
 
+    @Transactional
     public Document create(Document doc, String email) {
         User user = getUserByEmail(email);
         doc.setOwner(user);
         doc.setLastEditedBy(user);
-        Document savedDocument = repo.save(doc);
+        Document savedDocument = repo.saveAndFlush(doc);
         createVersionSnapshot(savedDocument, user);
         return savedDocument;
     }
@@ -62,7 +71,7 @@ public class DocumentService {
         existing.setTitle(newDoc.getTitle());
         existing.setContent(newDoc.getContent());
         existing.setLastEditedBy(editor);
-        Document savedDocument = repo.save(existing);
+        Document savedDocument = repo.saveAndFlush(existing);
         createVersionSnapshot(savedDocument, editor);
         return savedDocument;
     }
@@ -74,7 +83,7 @@ public class DocumentService {
         requireEditorAccess(doc, editor);
         doc.setContent(newContent);
         doc.setLastEditedBy(editor);
-        Document savedDocument = repo.save(doc);
+        Document savedDocument = repo.saveAndFlush(doc);
         createVersionSnapshot(savedDocument, editor);
         return savedDocument;
     }
@@ -86,14 +95,14 @@ public class DocumentService {
         requireEditorAccess(existing, editor);
 
         if (partialDoc.getTitle() != null) {
-            existing.setTitle(partialDoc.getTitle());
+            existing.setTitle(partialDoc.getTitle().trim());
         }
         if (partialDoc.getContent() != null) {
             existing.setContent(partialDoc.getContent());
         }
 
         existing.setLastEditedBy(editor);
-        Document savedDocument = repo.save(existing);
+        Document savedDocument = repo.saveAndFlush(existing);
         createVersionSnapshot(savedDocument, editor);
         return savedDocument;
     }
@@ -101,8 +110,9 @@ public class DocumentService {
     @Transactional
     public void delete(Long id, String email) {
         Document existing = getOwnedDocument(id, email, "delete");
-        existing.getCollaboratorAccesses().clear();
-        documentVersionRepository.deleteByDocumentId(existing.getId());
+        // Entity deletes keep Hibernate's managed state consistent with the database.
+        documentVersionRepository.deleteAll(
+                documentVersionRepository.findByDocumentIdOrderByEditedAtDesc(existing.getId()));
         repo.delete(existing);
     }
 
@@ -111,6 +121,7 @@ public class DocumentService {
                 .orElseThrow(() -> new ResourceNotFoundException("User not found with email: " + email));
     }
 
+    @Transactional
     public Document createStarterDocument(String email) {
         Document document = new Document();
         document.setTitle("Getting Started");
@@ -118,6 +129,7 @@ public class DocumentService {
         return create(document, email);
     }
 
+    @Transactional
     public Document getFirstOrCreateStarter(String email) {
         List<Document> documents = getAll(email);
         if (!documents.isEmpty()) {
@@ -144,6 +156,7 @@ public class DocumentService {
 
         if (existingAccess.isPresent()) {
             existingAccess.get().setRole(role);
+            events.publishEvent(new DocumentAccessChangedEvent(id, normalizedEmail, role.name()));
             return repo.save(document);
         }
 
@@ -152,9 +165,27 @@ public class DocumentService {
         access.setUser(collaborator);
         access.setRole(role);
         document.getCollaboratorAccesses().add(access);
+        events.publishEvent(new DocumentAccessChangedEvent(id, normalizedEmail, role.name()));
         return repo.save(document);
     }
 
+    @Transactional
+    public Document removeCollaborator(Long id, Long userId, String ownerEmail) {
+        Document document = getOwnedDocument(id, ownerEmail, "share");
+        if (document.getOwner().getId().equals(userId)) {
+            throw new BadRequestException("The document owner cannot be removed.");
+        }
+        DocumentAccess access = document.getCollaboratorAccesses().stream()
+                .filter(item -> item.getUser().getId().equals(userId))
+                .findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException("Collaborator not found."));
+        String email = access.getUser().getEmail();
+        document.getCollaboratorAccesses().remove(access);
+        events.publishEvent(new DocumentAccessChangedEvent(id, email, null));
+        return repo.save(document);
+    }
+
+    @Transactional(readOnly = true)
     public List<DocumentVersion> getVersionHistory(Long id, String email) {
         Document document = getById(id, email);
         return documentVersionRepository.findByDocumentIdOrderByEditedAtDesc(document.getId());
@@ -163,7 +194,7 @@ public class DocumentService {
     private Document getOwnedDocument(Long id, String ownerEmail, String action) {
         Document document = getById(id, ownerEmail);
         if (document.getOwner() == null || !document.getOwner().getEmail().equalsIgnoreCase(ownerEmail)) {
-            throw new BadRequestException("Only the document owner can " + action + " this document.");
+            throw new AccessDeniedException("Only the document owner can " + action + " this document.");
         }
         return document;
     }
@@ -173,7 +204,12 @@ public class DocumentService {
             return;
         }
 
-        throw new BadRequestException("Only document owners and editors can edit this document.");
+        throw new AccessDeniedException("Only document owners and editors can edit this document.");
+    }
+
+    @Transactional(readOnly = true)
+    public void requireEditorAccess(Long documentId, String email) {
+        requireEditorAccess(getById(documentId, email), getUserByEmail(email));
     }
 
     private boolean isOwner(Document document, User user) {

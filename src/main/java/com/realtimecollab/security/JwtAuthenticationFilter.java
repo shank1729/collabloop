@@ -1,14 +1,12 @@
 package com.realtimecollab.security;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.realtimecollab.dto.ApiErrorResponse;
 import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -17,22 +15,21 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
-import java.time.LocalDateTime;
 
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
     private final CustomUserDetailsService userDetailsService;
-    private final ObjectMapper objectMapper;
+    private final ApiAuthenticationEntryPoint entryPoint;
 
     public JwtAuthenticationFilter(
             JwtService jwtService,
             CustomUserDetailsService userDetailsService,
-            ObjectMapper objectMapper) {
+            ApiAuthenticationEntryPoint entryPoint) {
         this.jwtService = jwtService;
         this.userDetailsService = userDetailsService;
-        this.objectMapper = objectMapper;
+        this.entryPoint = entryPoint;
     }
 
     @Override
@@ -48,19 +45,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
         String jwt = authHeader.substring(7);
-        String username;
-
         try {
-            username = jwtService.extractUsername(jwt);
-        } catch (JwtException | IllegalArgumentException ex) {
-            writeUnauthorizedResponse(response, request.getRequestURI(), "Session expired or token is invalid.");
-            return;
-        }
+            String username = jwtService.extractUsername(jwt);
+            if (username == null || username.isBlank()) throw new BadCredentialsException("Invalid subject.");
+            if (SecurityContextHolder.getContext().getAuthentication() == null) {
+                UserDetails userDetails = userDetailsService.loadUserByUsername(username);
 
-        if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-            UserDetails userDetails = userDetailsService.loadUserByUsername(username);
-
-            if (jwtService.isTokenValid(jwt, userDetails)) {
+                if (!jwtService.isTokenValid(jwt, userDetails)) throw new BadCredentialsException("Invalid token.");
                 UsernamePasswordAuthenticationToken authToken =
                         new UsernamePasswordAuthenticationToken(
                                 userDetails,
@@ -70,24 +61,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                 SecurityContextHolder.getContext().setAuthentication(authToken);
             }
+        } catch (JwtException | IllegalArgumentException | AuthenticationException ex) {
+            SecurityContextHolder.clearContext();
+            entryPoint.commence(request, response, new BadCredentialsException("Invalid token.", ex));
+            return;
         }
 
         filterChain.doFilter(request, response);
     }
 
-    private void writeUnauthorizedResponse(
-            HttpServletResponse response,
-            String path,
-            String message) throws IOException {
-        ApiErrorResponse errorResponse = new ApiErrorResponse();
-        errorResponse.setTimestamp(LocalDateTime.now());
-        errorResponse.setStatus(HttpStatus.UNAUTHORIZED.value());
-        errorResponse.setError(HttpStatus.UNAUTHORIZED.getReasonPhrase());
-        errorResponse.setMessage(message);
-        errorResponse.setPath(path);
-
-        response.setStatus(HttpStatus.UNAUTHORIZED.value());
-        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        objectMapper.writeValue(response.getWriter(), errorResponse);
-    }
 }

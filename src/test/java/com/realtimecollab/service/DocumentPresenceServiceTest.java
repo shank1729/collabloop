@@ -9,6 +9,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
+import com.realtimecollab.dto.ShareDocumentRequest;
+import com.realtimecollab.entity.DocumentRole;
+import com.realtimecollab.repository.UserRepository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -26,6 +30,9 @@ class DocumentPresenceServiceTest {
 
     @Autowired
     private DocumentPresenceService presenceService;
+
+    @Autowired
+    private UserRepository userRepository;
 
     @Test
     void joinAddsUserToDocumentPresence() {
@@ -81,6 +88,29 @@ class DocumentPresenceServiceTest {
         assertThatThrownBy(() -> presenceService.join(document.getId(), "session-1", "stranger@example.com"))
                 .isInstanceOf(ResourceNotFoundException.class)
                 .hasMessage("Document not found with id: " + document.getId());
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void sharedEditorCanTypeWithoutAnHttpOrCallerTransaction() {
+        String owner = "presence-owner@example.com";
+        String editor = "presence-editor@example.com";
+        register("Owner", owner);
+        register("Editor", editor);
+        Document document = documentService.create(document("Presence", "Draft"), owner);
+        try {
+            var request = new ShareDocumentRequest();
+            request.setEmail(editor);
+            request.setRole(DocumentRole.EDITOR);
+            documentService.shareDocument(document.getId(), request, owner);
+            assertThat(presenceService.markTyping(document.getId(), "editor-session", editor).getActiveUsers())
+                    .singleElement().extracting("status").isEqualTo("TYPING");
+        } finally {
+            presenceService.leave("editor-session");
+            documentService.delete(document.getId(), owner);
+            userRepository.delete(userRepository.findByEmail(owner).orElseThrow());
+            userRepository.delete(userRepository.findByEmail(editor).orElseThrow());
+        }
     }
 
     private void register(String name, String email) {

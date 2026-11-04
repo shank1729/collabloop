@@ -2,7 +2,6 @@ package com.realtimecollab.security;
 
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.SignatureAlgorithm;
 import io.jsonwebtoken.security.Keys;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -12,6 +11,9 @@ import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.function.Function;
+import java.util.Locale;
+import java.time.Instant;
+import io.jsonwebtoken.JwtException;
 
 @Service
 public class JwtService {
@@ -21,13 +23,29 @@ public class JwtService {
 
     public JwtService(
             @Value("${app.jwt.secret}") String secret,
-            @Value("${app.jwt.expiration-ms}") long expirationMs) {
+            @Value("${app.jwt.expiration-ms}") long expirationMs,
+            @Value("${app.security.production:false}") boolean production) {
+        String normalized = secret == null ? "" : secret.toLowerCase(Locale.ROOT);
+        if (secret == null || secret.isBlank() || secret.getBytes(StandardCharsets.UTF_8).length < 32 ||
+                normalized.startsWith("replace") || normalized.contains("change-later") ||
+                (production && (normalized.startsWith("local-") || normalized.startsWith("test-") || normalized.contains("-demo-")))) {
+            throw new IllegalArgumentException("JWT_SECRET is required and must be a unique random secret of at least 32 UTF-8 bytes; example secrets are not accepted in production.");
+        }
+        if (expirationMs <= 0) throw new IllegalArgumentException("JWT_EXPIRATION_MS must be positive.");
         this.signingKey = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
         this.expirationMs = expirationMs;
     }
 
     public String extractUsername(String token) {
-        return extractClaim(token, Claims::getSubject);
+        String username = extractClaim(token, Claims::getSubject);
+        if (username == null || username.isBlank()) throw new JwtException("Token subject is required.");
+        return username;
+    }
+
+    public Instant extractExpiration(String token) {
+        Date expiration = extractClaim(token, Claims::getExpiration);
+        if (expiration == null) throw new JwtException("Token expiration is required.");
+        return expiration.toInstant();
     }
 
     public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
@@ -43,7 +61,7 @@ public class JwtService {
                 .subject(userDetails.getUsername())
                 .issuedAt(now)
                 .expiration(expiry)
-                .signWith(signingKey, SignatureAlgorithm.HS256)
+                .signWith(signingKey, Jwts.SIG.HS256)
                 .compact();
     }
 
@@ -53,7 +71,7 @@ public class JwtService {
     }
 
     private boolean isTokenExpired(String token) {
-        return extractClaim(token, Claims::getExpiration).before(new Date());
+        return !Instant.now().isBefore(extractExpiration(token));
     }
 
     private Claims extractAllClaims(String token) {

@@ -1,0 +1,24 @@
+{$APP_HOST} {
+    encode zstd gzip
+
+    # Strip /api before forwarding REST calls; preserve /ws for SockJS/STOMP.
+    handle_path /api/* {
+        reverse_proxy backend:8080 {
+            header_up -Forwarded
+        }
+    }
+
+    @socket path /ws /ws/*
+    handle @socket {
+        reverse_proxy backend:8080 {
+            header_up -Forwarded
+        }
+    }
+
+    handle {
+        root * /srv
+        header Cache-Control "no-cache"
+        try_files {path} /index.html
+        file_server
+    }
+}

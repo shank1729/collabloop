@@ -22,14 +22,15 @@ Start PostgreSQL with a `collabdb` database, then run the backend:
 $env:DB_URL="jdbc:postgresql://localhost:5432/collabdb"
 $env:DB_USERNAME="postgres"
 $env:DB_PASSWORD="your_postgres_password"
-.\mvnw spring-boot:run
+$env:JWT_SECRET="local-development-only-secret-at-least-32-bytes"
+.\mvnw.cmd spring-boot:run
 ```
 
 In another terminal, run the frontend:
 
 ```powershell
 cd frontend
-npm install
+npm ci
 npm start
 ```
 
@@ -43,6 +44,16 @@ REACT_APP_WS_URL=http://localhost:8080/ws
 Create a local `frontend/.env` only if you need to override those values.
 
 For hosting setup, see [`DEPLOYMENT.md`](DEPLOYMENT.md).
+
+Recorded hosting URLs: [frontend](https://realtime-collab-frontend.onrender.com)
+and [backend health](https://realtime-collab-backend-6bbk.onrender.com/actuator/health).
+Check Render for the deployed commit; local improvements are not published until
+they are committed, pushed and deployed.
+
+Backend env templates are references for terminal/Eclipse/Render configuration;
+Spring does not load a root `.env` automatically. The frontend templates are
+public build-time URL settings. See the deployment guide for local and production
+examples, verification, redeployment, and rollback instructions.
 
 ## Backend
 
@@ -160,12 +171,29 @@ Current settings:
 - PostgreSQL URL: `DB_URL`, defaulting to `jdbc:postgresql://localhost:5432/collabdb`
 - username: `DB_USERNAME`, defaulting to `postgres`
 - password: `DB_PASSWORD`, defaulting to `postgres` for local development
-- JWT secret: `JWT_SECRET`, with a local development fallback
+- JWT secret: `JWT_SECRET`, required; at least 32 UTF-8 bytes, with no fallback
 - JWT expiry: `JWT_EXPIRATION_MS`, defaulting to 24 hours
 - allowed frontend origins: `CORS_ALLOWED_ORIGINS`, defaulting to `http://localhost:3000`
 - schema migrations: Flyway
 - Hibernate DDL mode: `validate`
-- SQL logging: enabled
+- SQL logging: disabled
+- Open-in-view: disabled; API relationships are explicitly fetched
+- production mode: `SPRING_PROFILES_ACTIVE=prod` (the Docker image's default)
+
+Production mode rejects the documented local/test/demo signing keys. Generate a
+unique secret using the deployment guide before restarting a production service.
+CORS accepts exact HTTP(S) origins only, shared by REST and SockJS configuration.
+Unauthenticated requests receive JSON 401 responses; insufficient document
+permissions receive 403. Login and registration share 20 requests per client IP
+per 60-second window by default, with JSON 429 responses and retry guidance.
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the policy, proxy trust configuration and
+single-instance limitations. Hosted client-IP identification needs verification;
+the safe default ignores forwarding headers and may group users behind a proxy.
+
+WebSocket sessions use the verified JWT's absolute expiry. Expired sessions stop
+accepting edits/subscriptions and receiving application updates; a scheduled sweep
+closes idle expired sockets and clears presence. The frontend stops reconnecting
+and asks the user to sign in again. Reconnecting does not renew a token.
 
 ### Local Environment Variables
 
@@ -328,12 +356,28 @@ The application uses Spring's STOMP message broker with SockJS support.
 /ws
 ```
 
-The endpoint is registered with SockJS enabled and currently allows all origins.
+The endpoint uses SockJS and the origins configured in `CORS_ALLOWED_ORIGINS`.
+Clients authenticate with their JWT. Document subscriptions and outgoing document
+updates are authorized against current access; clients cannot publish directly
+to broker topics.
 
 ### Broker configuration
 
 - application destination prefix: `/app`
 - subscription topic prefix: `/topic`
+- private access notifications: `/user/queue/document-access`
+
+Owners can change a collaborator's role with `POST /documents/{id}/share` and
+remove access with `DELETE /documents/{id}/collaborators/{userId}`. Both return the
+updated document. A private access notification is sent to the affected user after
+the transaction commits. A null `role` means access was removed.
+
+Presence messages use `/app/documents/{id}/presence/{join|typing|viewing|heartbeat|leave}`
+and snapshots arrive on `/topic/documents/{id}/presence`. Clients heartbeat every
+15 seconds; sessions expire after 45 seconds of silence, and typing expires after
+4 seconds unless refreshed. People are deduplicated across tabs. Presence is
+in-memory state for a single backend instance; horizontal scaling requires shared
+presence storage and a shared broker.
 
 ### Send edits
 
@@ -425,7 +469,9 @@ Run tests with:
 .\mvnw.cmd test
 ```
 
-Tests run with the `test` Spring profile and use an in-memory H2 database, so they do not depend on your local PostgreSQL password or data. Flyway migrations run against H2 during tests too, which verifies that the schema scripts can boot the application from an empty database.
+Tests run with the `test` Spring profile and use an in-memory H2 database. Flyway
+migrations run against H2 too. For full backend/frontend commands, environment
+isolation guidance, CI jobs and the release checklist, see [TESTING.md](TESTING.md).
 
 The backend includes service-level integration tests for:
 
@@ -443,6 +489,12 @@ The backend also includes controller/API integration tests for:
 - authenticated document creation
 - role-based document access over HTTP
 - sharing, updating, deleting, and history endpoints
+
+A real HTTP + SockJS/STOMP integration test connects two authenticated users and
+checks two-way edits, presence, role notifications and revocation, including an
+old subscription that remains open after access is removed. GitHub Actions runs
+backend verification, frontend tests/build and a Docker image build; it does not
+deploy the application.
 
 ## Observability
 
@@ -467,12 +519,12 @@ Based on the current implementation:
 
 - WebSocket updates only persist `content`, even if other fields are present
 - conflict resolution and operational transforms/CRDT logic are not implemented
-- automated test coverage is still minimal
+- automated integration tests use H2; PostgreSQL and hosted smoke checks remain necessary
 
 ## Suggested Next Improvements
 
-- add typing timeout handling
-- add integration tests for REST and WebSocket flows
+- add PostgreSQL integration and browser automation coverage
+- assess refresh tokens and a shared rate limiter when scaling
 - add Docker Compose for backend, frontend, and PostgreSQL
 
 ## Useful Commands

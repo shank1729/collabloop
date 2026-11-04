@@ -11,7 +11,7 @@ public class DocumentPatchRequest {
     private String content;
 
     @AssertTrue(message = "At least one field must be provided")
-    public boolean hasAtLeastOneField() {
+    public boolean isAtLeastOneFieldProvided() {
         return title != null || content != null;
     }
 

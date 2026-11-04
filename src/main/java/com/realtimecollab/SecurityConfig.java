@@ -1,11 +1,11 @@
 package com.realtimecollab;
 
-import java.util.Arrays;
 import java.util.List;
+import com.realtimecollab.config.AllowedOrigins;
+import com.realtimecollab.security.ApiAuthenticationEntryPoint;
 
 import com.realtimecollab.security.CustomUserDetailsService;
 import com.realtimecollab.security.JwtAuthenticationFilter;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -26,15 +26,18 @@ public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final CustomUserDetailsService userDetailsService;
-    private final List<String> allowedOriginPatterns;
+    private final AllowedOrigins allowedOrigins;
+    private final ApiAuthenticationEntryPoint authenticationEntryPoint;
 
     public SecurityConfig(
             JwtAuthenticationFilter jwtAuthenticationFilter,
             CustomUserDetailsService userDetailsService,
-            @Value("${app.cors.allowed-origins}") String allowedOrigins) {
+            AllowedOrigins allowedOrigins,
+            ApiAuthenticationEntryPoint authenticationEntryPoint) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.userDetailsService = userDetailsService;
-        this.allowedOriginPatterns = parseAllowedOrigins(allowedOrigins);
+        this.allowedOrigins = allowedOrigins;
+        this.authenticationEntryPoint = authenticationEntryPoint;
     }
 
     @Bean
@@ -43,6 +46,7 @@ public class SecurityConfig {
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .exceptionHandling(exceptions -> exceptions.authenticationEntryPoint(authenticationEntryPoint))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(
                         "/auth/**",
@@ -83,20 +87,16 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOriginPatterns(allowedOriginPatterns);
+        configuration.setAllowedOrigins(allowedOrigins.values());
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(List.of("*"));
+        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "X-Requested-With"));
+        configuration.setExposedHeaders(List.of("Retry-After"));
         configuration.setAllowCredentials(true);
+        configuration.setMaxAge(3600L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         return source;
     }
 
-    private List<String> parseAllowedOrigins(String allowedOrigins) {
-        return Arrays.stream(allowedOrigins.split(","))
-                .map(String::trim)
-                .filter(origin -> !origin.isBlank())
-                .toList();
-    }
 }

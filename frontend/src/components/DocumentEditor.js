@@ -1,29 +1,22 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import DocumentDashboard from "./DocumentDashboard";
+import SharingPanel from "./SharingPanel";
+import PresencePanel from "./PresencePanel";
+import VersionHistoryPanel from "./VersionHistoryPanel";
+import VersionPreview from "./VersionPreview";
 import { useWebSocket } from "../context/WebSocketContext";
 import {
   createDocument,
   deleteDocument,
   getDocumentById,
-  getDocumentHistory,
   getDocuments,
   patchDocument,
-  shareDocument,
 } from "../services/documentService";
-
-const starterDocumentPayload = {
-  title: "Getting Started",
-  content: "Start collaborating on your first shared document.",
-};
 
 const roleLabels = {
   OWNER: "Owner",
   EDITOR: "Editor",
   VIEWER: "Viewer",
-};
-
-const presenceLabels = {
-  TYPING: "Typing",
-  VIEWING: "Viewing",
 };
 
 function normalizeRole(role) {
@@ -35,39 +28,42 @@ function normalizeRole(role) {
   return rawRole.toUpperCase().replace(/^ROLE_/, "");
 }
 
-function normalizeStatus(status) {
-  return status ? status.toUpperCase() : "";
-}
-
 export default function DocumentEditor({ session, onLogout }) {
   const {
     connected,
     lastMessage,
     presenceMessage,
+    accessMessage,
+    unsubscribeFromDocument,
     sendPresenceTyping,
-    sendPresenceViewing,
     sendUpdate,
     subscribeToDocument,
   } = useWebSocket();
   const [documents, setDocuments] = useState([]);
+  const [showDashboard, setShowDashboard] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [documentLoading, setDocumentLoading] = useState(false);
   const [selectedDocumentId, setSelectedDocumentId] = useState(null);
   const [title, setTitle] = useState("");
   const [titleDraft, setTitleDraft] = useState("");
   const [titleSaving, setTitleSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const [titleStatus, setTitleStatus] = useState("");
   const [content, setContent] = useState("");
   const [updatedAt, setUpdatedAt] = useState("");
   const [collaborators, setCollaborators] = useState([]);
   const [versionNumber, setVersionNumber] = useState(null);
   const [lastEditedByName, setLastEditedByName] = useState("");
-  const [history, setHistory] = useState([]);
+  const [previewVersion, setPreviewVersion] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [syncStatus, setSyncStatus] = useState("Loading documents...");
-  const [shareEmail, setShareEmail] = useState("");
-  const [shareRole, setShareRole] = useState("EDITOR");
-  const [shareStatus, setShareStatus] = useState("");
+  const [sharingPending, setSharingPending] = useState(false);
   const debounceTimerRef = useRef(null);
+  const pendingUpdateRef = useRef(null);
+  const handledAccessMessage = useRef(null);
+  const mutationPending = titleSaving || deleting || sharingPending;
 
   const selectedDocument = useMemo(
     () => documents.find((document) => document.id === selectedDocumentId) || null,
@@ -81,7 +77,7 @@ export default function DocumentEditor({ session, onLogout }) {
 
     if (
       selectedDocument.ownerEmail?.toLowerCase() === session.email?.toLowerCase() ||
-      selectedDocument.ownerId === session.id
+      (selectedDocument.ownerId != null && selectedDocument.ownerId === (session.userId ?? session.id))
     ) {
       return "OWNER";
     }
@@ -91,7 +87,7 @@ export default function DocumentEditor({ session, onLogout }) {
     );
 
     return normalizeRole(collaborator?.role) || "VIEWER";
-  }, [selectedDocument, session.email, session.id]);
+  }, [selectedDocument, session.email, session.id, session.userId]);
 
   const canEditDocument = currentUserRole === "OWNER" || currentUserRole === "EDITOR";
   const canManageDocument = currentUserRole === "OWNER";
@@ -107,43 +103,37 @@ export default function DocumentEditor({ session, onLogout }) {
     );
   }, [presenceMessage, selectedDocumentId, session.email]);
 
-  useEffect(() => {
-    const loadWorkspace = async () => {
-      try {
-        setLoading(true);
-        setError("");
+  const loadWorkspace = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError("");
 
-        let workspaceDocuments = await getDocuments();
-        if (workspaceDocuments.length === 0) {
-          const createdDocument = await createDocument(starterDocumentPayload);
-          workspaceDocuments = [createdDocument];
-        }
-
-        setDocuments(workspaceDocuments);
-        setSelectedDocumentId(workspaceDocuments[0].id);
-        setSyncStatus("Workspace loaded");
-      } catch (loadError) {
-        setError(loadError.message || "Unable to load your documents.");
-        setSyncStatus("Could not load workspace");
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadWorkspace();
+      const workspaceDocuments = await getDocuments();
+      setDocuments(workspaceDocuments);
+      setSyncStatus("Workspace loaded");
+    } catch (loadError) {
+      setError(loadError.message || "Unable to load your documents.");
+      setSyncStatus("Could not load workspace");
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
+    loadWorkspace();
+  }, [loadWorkspace]);
+
+  useEffect(() => {
+    let active = true;
     const loadDocument = async () => {
-      if (!selectedDocumentId) {
+      if (!selectedDocumentId || showDashboard) {
         return;
       }
 
       try {
-        const [document, documentHistory] = await Promise.all([
-          getDocumentById(selectedDocumentId),
-          getDocumentHistory(selectedDocumentId),
-        ]);
+        setDocumentLoading(true);
+        const document = await getDocumentById(selectedDocumentId);
+        if (!active) return;
         const loadedTitle = document.title || "Untitled document";
         setTitle(loadedTitle);
         setTitleDraft(loadedTitle);
@@ -153,7 +143,6 @@ export default function DocumentEditor({ session, onLogout }) {
         setCollaborators(document.collaborators || []);
         setVersionNumber(document.version ?? null);
         setLastEditedByName(document.lastEditedByName || "");
-        setHistory(documentHistory);
         setDocuments((prev) =>
           prev.map((workspaceDocument) =>
             workspaceDocument.id === document.id
@@ -161,27 +150,59 @@ export default function DocumentEditor({ session, onLogout }) {
               : workspaceDocument
           )
         );
-        setShareStatus("");
         setSyncStatus("Document loaded");
-        if (connected) {
-          sendPresenceViewing(selectedDocumentId);
-        }
       } catch (loadError) {
-        setError(loadError.message || "Unable to load the selected document.");
+        if (active) setError(loadError.message || "Unable to load the selected document.");
+      } finally {
+        if (active) setDocumentLoading(false);
       }
     };
 
     loadDocument();
-    if (connected) {
-      subscribeToDocument(selectedDocumentId);
+    return () => { active = false; };
+  }, [selectedDocumentId, showDashboard]);
+
+  useEffect(() => {
+    if (!connected || showDashboard || error || !selectedDocumentId) return;
+    subscribeToDocument(selectedDocumentId);
+    return () => unsubscribeFromDocument();
+  }, [connected, showDashboard, error, selectedDocumentId, subscribeToDocument, unsubscribeFromDocument]);
+
+  useEffect(() => {
+    if (!accessMessage || handledAccessMessage.current === accessMessage) return;
+    handledAccessMessage.current = accessMessage;
+    const documentId = accessMessage.documentId;
+    if (selectedDocumentId === documentId) {
+      clearTimeout(debounceTimerRef.current);
+      pendingUpdateRef.current = null;
     }
-  }, [connected, selectedDocumentId, sendPresenceViewing, subscribeToDocument]);
+    if (accessMessage.role == null) {
+      setDocuments((prev) => prev.filter((document) => document.id !== documentId));
+      if (selectedDocumentId === documentId) {
+        unsubscribeFromDocument();
+        setContent("");
+        setPreviewVersion(null);
+        setSelectedDocumentId(null);
+        setShowDashboard(true);
+        setError("Your access to this document was removed.");
+      }
+    } else {
+      const updatePeople = (people) => (people || []).map((person) =>
+        person.email?.toLowerCase() === session.email?.toLowerCase()
+          ? { ...person, role: accessMessage.role } : person);
+      setDocuments((prev) => prev.map((document) => document.id === documentId
+        ? { ...document, collaborators: updatePeople(document.collaborators) } : document));
+      if (selectedDocumentId === documentId) setCollaborators(updatePeople);
+    }
+  }, [accessMessage, selectedDocumentId, session.email, unsubscribeFromDocument]);
 
   useEffect(() => {
     if (selectedDocumentId && lastMessage && lastMessage.id === selectedDocumentId) {
       setContent(lastMessage.content || "");
       setUpdatedAt(lastMessage.updatedAt || new Date().toISOString());
       setVersionNumber(lastMessage.version ?? versionNumber);
+      setDocuments((prev) => prev.map((document) => document.id === lastMessage.id
+        ? { ...document, ...lastMessage } : document));
       setSyncStatus(isViewer ? "Read-only access" : "Synced live");
     }
   }, [isViewer, lastMessage, selectedDocumentId, versionNumber]);
@@ -207,6 +228,7 @@ export default function DocumentEditor({ session, onLogout }) {
     }
 
     const nextContent = event.target.value;
+    pendingUpdateRef.current = { id: selectedDocumentId, content: nextContent };
     setContent(nextContent);
     setSyncStatus(connected ? "Typing..." : "Offline changes");
 
@@ -219,22 +241,22 @@ export default function DocumentEditor({ session, onLogout }) {
     }
 
     debounceTimerRef.current = setTimeout(() => {
-      if (selectedDocumentId) {
-        sendUpdate({
-          id: selectedDocumentId,
-          content: nextContent,
-        });
-      }
+      if (pendingUpdateRef.current) sendUpdate(pendingUpdateRef.current);
+      pendingUpdateRef.current = null;
       setUpdatedAt(new Date().toISOString());
       setSyncStatus(connected ? "Live update sent" : "Waiting for connection");
-      if (connected) {
-        sendPresenceViewing(selectedDocumentId);
-      }
     }, 300);
+  };
+
+  const flushPendingUpdate = () => {
+    clearTimeout(debounceTimerRef.current);
+    if (pendingUpdateRef.current) sendUpdate(pendingUpdateRef.current);
+    pendingUpdateRef.current = null;
   };
 
   const handleTitleSubmit = async (event) => {
     event.preventDefault();
+    if (mutationPending) return;
 
     if (!selectedDocumentId || !canEditDocument) {
       setTitleStatus("Only owners and editors can rename this document.");
@@ -244,6 +266,10 @@ export default function DocumentEditor({ session, onLogout }) {
     const nextTitle = titleDraft.trim();
     if (!nextTitle) {
       setTitleStatus("Title cannot be empty.");
+      return;
+    }
+    if (nextTitle.length > 255) {
+      setTitleStatus("Title must be at most 255 characters.");
       return;
     }
 
@@ -281,62 +307,37 @@ export default function DocumentEditor({ session, onLogout }) {
   };
 
   const handleCreateDocument = async () => {
+    if (creating || mutationPending) return;
     try {
+      setCreating(true);
+      setError("");
       const newDocument = await createDocument({
         title: `Shared Notes ${documents.length + 1}`,
         content: "Start writing here...",
       });
       setDocuments((prev) => [newDocument, ...prev]);
+      flushPendingUpdate();
       setSelectedDocumentId(newDocument.id);
+      setPreviewVersion(null);
+      setDocumentLoading(true);
+      setShowDashboard(false);
       setSyncStatus("New document created");
     } catch (createError) {
       setError(createError.message || "Unable to create a new document.");
-    }
-  };
-
-  const handleShare = async (event) => {
-    event.preventDefault();
-    if (!selectedDocumentId || !canManageDocument) {
-      setShareStatus("Only the document owner can share this document.");
-      return;
-    }
-
-    try {
-      const updatedDocument = await shareDocument(
-        selectedDocumentId,
-        shareEmail,
-        shareRole
-      );
-      if (process.env.NODE_ENV === "development") {
-        console.info("Share request sent", {
-          documentId: selectedDocumentId,
-          email: shareEmail,
-          role: shareRole,
-        });
-        console.info("Share response received", updatedDocument);
-      }
-      setCollaborators(updatedDocument.collaborators || []);
-      setDocuments((prev) =>
-        prev.map((document) =>
-          document.id === updatedDocument.id ? updatedDocument : document
-        )
-      );
-      setShareStatus(`Shared with ${shareEmail} as ${roleLabels[shareRole]}.`);
-      setShareEmail("");
-      setShareRole("EDITOR");
-    } catch (shareError) {
-      setShareStatus(shareError.message || "Unable to share the document.");
+    } finally {
+      setCreating(false);
     }
   };
 
   const handleDeleteDocument = async () => {
+    if (mutationPending) return;
     if (!selectedDocumentId || !canManageDocument) {
       setError("Only the document owner can delete this document.");
       return;
     }
 
     const confirmed = window.confirm(
-      "Delete this document? This action cannot be undone."
+      `Delete "${title}"? This will permanently delete the document and its version history.`
     );
 
     if (!confirmed) {
@@ -344,25 +345,25 @@ export default function DocumentEditor({ session, onLogout }) {
     }
 
     try {
+      setDeleting(true);
+      setDeleteError("");
       await deleteDocument(selectedDocumentId);
+      clearTimeout(debounceTimerRef.current);
+      pendingUpdateRef.current = null;
 
       const remainingDocuments = documents.filter(
         (document) => document.id !== selectedDocumentId
       );
 
-      if (remainingDocuments.length === 0) {
-        const starterDocument = await createDocument(starterDocumentPayload);
-        setDocuments([starterDocument]);
-        setSelectedDocumentId(starterDocument.id);
-      } else {
-        setDocuments(remainingDocuments);
-        setSelectedDocumentId(remainingDocuments[0].id);
-      }
+      setDocuments(remainingDocuments);
+      setSelectedDocumentId(null);
+      setShowDashboard(true);
 
-      setShareStatus("");
       setSyncStatus("Document deleted");
     } catch (deleteError) {
-      setError(deleteError.message || "Unable to delete the document.");
+      setDeleteError(deleteError.message || "Unable to delete the document. Please try again.");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -370,11 +371,37 @@ export default function DocumentEditor({ session, onLogout }) {
     ? new Date(updatedAt).toLocaleString()
     : "Not available";
 
-  if (loading) {
+  const openDocument = (id) => {
+    if (mutationPending) return;
+    flushPendingUpdate();
+    setPreviewVersion(null);
+    setDeleteError("");
+    setError("");
+    setDocumentLoading(true);
+    setSelectedDocumentId(id);
+    setShowDashboard(false);
+  };
+
+  const backToDocuments = () => {
+    if (mutationPending) return;
+    flushPendingUpdate();
+    setPreviewVersion(null);
+    setError("");
+    setShowDashboard(true);
+  };
+
+  if (showDashboard) {
+    return <DocumentDashboard documents={documents} session={session} onOpen={openDocument}
+      onCreate={handleCreateDocument} onLogout={onLogout} onRefresh={loadWorkspace}
+      creating={creating} loading={loading} error={error} />;
+  }
+
+  if (documentLoading && !error) {
     return (
       <main className="editor-layout">
         <section className="editor-card">
-          <p className="editor-banner">Loading workspace...</p>
+          <p className="editor-banner" role="status">Loading document...</p>
+          <button className="dashboard-secondary" onClick={backToDocuments}>Back to documents</button>
         </section>
       </main>
     );
@@ -384,7 +411,8 @@ export default function DocumentEditor({ session, onLogout }) {
     return (
       <main className="editor-layout">
         <section className="editor-card">
-          <p className="editor-banner editor-banner-error">{error}</p>
+          <p className="editor-banner editor-banner-error" role="alert">{error}</p>
+          <button className="dashboard-secondary" onClick={backToDocuments}>Back to documents</button>
         </section>
       </main>
     );
@@ -396,8 +424,9 @@ export default function DocumentEditor({ session, onLogout }) {
         <div className="workspace-sidebar-header">
           <p className="editor-kicker">Shared workspace</p>
           <h2>Your documents</h2>
-          <button className="workspace-button" type="button" onClick={handleCreateDocument}>
-            New document
+          <button className="dashboard-secondary" type="button" disabled={mutationPending} onClick={backToDocuments}>All documents</button>
+          <button className="workspace-button" type="button" disabled={creating || mutationPending} onClick={handleCreateDocument}>
+            {creating ? "Creating..." : "New document"}
           </button>
         </div>
 
@@ -406,12 +435,13 @@ export default function DocumentEditor({ session, onLogout }) {
             <button
               key={document.id}
               type="button"
+              disabled={mutationPending}
               className={
                 document.id === selectedDocumentId
                   ? "workspace-list-item workspace-list-item-active"
                   : "workspace-list-item"
               }
-              onClick={() => setSelectedDocumentId(document.id)}
+              onClick={() => { if (document.id !== selectedDocumentId) openDocument(document.id); }}
             >
               <strong>{document.title}</strong>
               <span>{document.ownerName || "Owner unavailable"}</span>
@@ -437,21 +467,21 @@ export default function DocumentEditor({ session, onLogout }) {
                     setTitleDraft(event.target.value);
                     setTitleStatus("");
                   }}
-                  disabled={!canEditDocument || titleSaving}
+                  disabled={!canEditDocument || mutationPending}
                   maxLength={255}
                 />
                 {canEditDocument ? (
                   <button
                     className="workspace-button document-title-button"
                     type="submit"
-                    disabled={titleSaving || titleDraft.trim() === title}
+                    disabled={mutationPending || titleDraft.trim() === title}
                   >
                     {titleSaving ? "Saving" : "Save"}
                   </button>
                 ) : null}
               </div>
               {titleStatus ? (
-                <p className="document-title-status">{titleStatus}</p>
+                <p className="document-title-status" role="status">{titleStatus}</p>
               ) : null}
             </form>
             <p className="editor-meta">
@@ -483,20 +513,23 @@ export default function DocumentEditor({ session, onLogout }) {
                 className="editor-pill editor-pill-danger"
                 onClick={handleDeleteDocument}
                 type="button"
+                disabled={mutationPending}
               >
-                Delete document
+                {deleting ? "Deleting..." : "Delete document"}
               </button>
             ) : null}
             <button
               className="editor-pill editor-pill-action"
-              onClick={onLogout}
+              onClick={() => { flushPendingUpdate(); onLogout(); }}
               type="button"
+              disabled={mutationPending}
             >
               Sign out
             </button>
           </div>
         </div>
 
+        {deleteError ? <p className="editor-banner editor-banner-error" role="alert">{deleteError}</p> : null}
         <div className="workspace-meta-row">
           <div className="workspace-owner-panel">
             <span className="workspace-section-title">Document owner</span>
@@ -508,58 +541,18 @@ export default function DocumentEditor({ session, onLogout }) {
               </p>
             ) : null}
           </div>
-          <div className="workspace-collaborators">
-            <span className="workspace-section-title">Collaborators</span>
-            <div className="workspace-chip-row">
-              {collaborators.length > 0 ? (
-                collaborators.map((collaborator) => (
-                  <span key={collaborator.id} className="workspace-chip">
-                    <span>{collaborator.name}</span>
-                    <small>{roleLabels[normalizeRole(collaborator.role)] || "Viewer"}</small>
-                  </span>
-                ))
-              ) : (
-                <span className="workspace-empty-text">No collaborators yet</span>
-              )}
-            </div>
-          </div>
         </div>
-
-        {canManageDocument ? (
-          <form className="workspace-share-form" onSubmit={handleShare}>
-            <label className="auth-field workspace-share-field">
-              <span>Share with teammate email</span>
-              <input
-                type="email"
-                value={shareEmail}
-                onChange={(event) => setShareEmail(event.target.value)}
-                placeholder="teammate@example.com"
-                required
-              />
-            </label>
-            <label className="auth-field workspace-role-field">
-              <span>Role</span>
-              <select
-                value={shareRole}
-                onChange={(event) => setShareRole(event.target.value)}
-              >
-                <option value="EDITOR">Editor</option>
-                <option value="VIEWER">Viewer</option>
-              </select>
-            </label>
-            <button className="workspace-button" type="submit">
-              Share document
-            </button>
-          </form>
-        ) : (
-          <p className="editor-banner workspace-banner">
-            Only the owner can share or delete this document.
-          </p>
-        )}
-        {shareStatus ? <p className="workspace-empty-text">{shareStatus}</p> : null}
+        <SharingPanel key={selectedDocumentId} documentId={selectedDocumentId}
+          collaborators={collaborators} canManage={canManageDocument}
+          disabled={titleSaving || deleting} onPendingChange={setSharingPending}
+          onChange={(document) => {
+            setCollaborators(document.collaborators || []);
+            setDocuments((prev) => prev.map((item) => item.id === document.id ? { ...item, ...document } : item));
+          }} />
 
         <div className="workspace-editor-grid">
           <div>
+            {previewVersion ? <VersionPreview version={previewVersion} onClose={() => setPreviewVersion(null)} /> : <>
             <label className="editor-label" htmlFor="document-content">
               Document content
             </label>
@@ -567,7 +560,7 @@ export default function DocumentEditor({ session, onLogout }) {
               id="document-content"
               value={content}
               onChange={handleChange}
-              disabled={!canEditDocument}
+              disabled={!canEditDocument || deleting}
               rows={14}
               className={canEditDocument ? "editor-textarea" : "editor-textarea editor-textarea-readonly"}
               placeholder={
@@ -576,55 +569,15 @@ export default function DocumentEditor({ session, onLogout }) {
                   : "Viewer access is read-only."
               }
             />
+            </>}
           </div>
 
           <aside className="workspace-side-panel">
-            <section className="workspace-presence-card">
-              <h3>Active now</h3>
-              <div className="workspace-presence-list">
-                {activeUsers.length > 0 ? (
-                  activeUsers.map((user) => {
-                    const status = normalizeStatus(user.status);
-                    return (
-                      <div key={user.userId || user.email} className="workspace-presence-item">
-                        <span
-                          className={
-                            status === "TYPING"
-                              ? "workspace-presence-dot workspace-presence-dot-typing"
-                              : "workspace-presence-dot"
-                          }
-                        />
-                        <div>
-                          <strong>{user.name || user.email}</strong>
-                          <span>{presenceLabels[status] || "Viewing"}</span>
-                        </div>
-                      </div>
-                    );
-                  })
-                ) : (
-                  <p className="workspace-empty-text">No other active viewers.</p>
-                )}
-              </div>
-            </section>
+            <PresencePanel connected={connected} users={activeUsers} />
 
-            <section className="workspace-history-card">
-              <h3>Version history</h3>
-              <div className="workspace-history-list">
-                {history.length > 0 ? (
-                  history.map((entry) => (
-                    <div key={entry.id} className="workspace-history-item">
-                      <strong>Version {entry.documentVersionNumber}</strong>
-                      <span>
-                        {entry.editedByName || "Unknown"} •{" "}
-                        {new Date(entry.editedAt).toLocaleString()}
-                      </span>
-                    </div>
-                  ))
-                ) : (
-                  <p className="workspace-empty-text">No history available yet.</p>
-                )}
-              </div>
-            </section>
+            <VersionHistoryPanel key={selectedDocumentId} documentId={selectedDocumentId}
+              currentVersion={versionNumber} selectedId={previewVersion?.id}
+              onSelect={(version) => { flushPendingUpdate(); setPreviewVersion(version); }} />
           </aside>
         </div>
       </section>

@@ -65,8 +65,12 @@ export function shareDocument(documentId, email, role) {
   });
 }
 
-export function getDocumentHistory(documentId) {
-  return fetchWithAuth(`/documents/${documentId}/history`, { method: "GET" });
+export function removeCollaborator(documentId, userId) {
+  return fetchWithAuth(`/documents/${documentId}/collaborators/${userId}`, { method: "DELETE" });
+}
+
+export function getDocumentHistory(documentId, { signal } = {}) {
+  return fetchWithAuth(`/documents/${documentId}/history`, { method: "GET", signal });
 }
 
 export async function deleteDocument(documentId) {
