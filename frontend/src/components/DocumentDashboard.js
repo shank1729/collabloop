@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import BrandLockup from "./BrandLockup";
 
 function isOwner(document, session) {
   return Boolean(
@@ -23,6 +24,7 @@ export default function DocumentDashboard({ documents, session, onOpen, onCreate
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState("all");
   const [sort, setSort] = useState("updated");
+  const accountName = session.name || session.email || "Your account";
   const ownedCount = documents.filter((document) => isOwner(document, session)).length;
   const search = query.trim().toLowerCase();
   const visibleDocuments = documents.filter((document) => {
@@ -41,73 +43,97 @@ export default function DocumentDashboard({ documents, session, onOpen, onCreate
   return (
     <main className="document-dashboard">
       <header className="dashboard-header">
-        <div><p className="editor-kicker">Collab workspace</p><h1>Documents</h1></div>
+        <BrandLockup />
         <div className="dashboard-actions">
-          <span className="dashboard-account">{session.name || session.email}</span>
-          <button className="dashboard-secondary" onClick={onLogout}>Sign out</button>
-          <button className="workspace-button" disabled={creating || loading} onClick={onCreate}>
-            {creating ? "Creating..." : "New document"}
-          </button>
+          <span className="dashboard-account">
+            <span className="dashboard-avatar" aria-hidden="true">{accountName.trim().charAt(0).toUpperCase()}</span>
+            {accountName}
+          </span>
+          <button className="dashboard-secondary" type="button" onClick={onLogout}>Sign out</button>
         </div>
       </header>
 
-      {error ? <p className="editor-banner editor-banner-error" role="alert">{error}</p> : null}
-
-      <div className="dashboard-toolbar">
-        <div className="dashboard-scopes" role="group" aria-label="Document ownership">
-          {[["all", "All documents", documents.length], ["owned", "Owned by me", ownedCount],
-            ["shared", "Shared with me", documents.length - ownedCount]].map(([value, label, count]) => (
-            <button key={value} aria-pressed={scope === value} onClick={() => setScope(value)}>
-              {label} <span>{count}</span>
-            </button>
-          ))}
+      <div className="dashboard-intro">
+        <div>
+          <p className="editor-kicker">Your workspace</p>
+          <h1>Documents</h1>
+          <p>Find your drafts, open a shared whiteboard, or start something new.</p>
         </div>
-        <div className="dashboard-controls">
-          <label>Search documents
-            <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Title, owner or collaborator" />
-          </label>
-          <label>Sort by
-            <select value={sort} onChange={(event) => setSort(event.target.value)}>
-              <option value="updated">Last edited</option><option value="created">Newest created</option><option value="title">Title A-Z</option>
-            </select>
-          </label>
-          <button className="dashboard-secondary" disabled={loading} onClick={onRefresh}>{loading ? "Refreshing..." : "Refresh documents"}</button>
-        </div>
+        <button className="workspace-button dashboard-create" type="button" disabled={creating || loading} onClick={onCreate}>
+          <span aria-hidden="true">+</span> {creating ? "Creating..." : "New document"}
+        </button>
       </div>
 
-      {loading ? <p role="status" className="dashboard-empty">Loading documents...</p> : documents.length === 0 ? (
-        <section className="dashboard-empty"><h2>{error ? "Documents unavailable" : "No documents yet"}</h2>
-          {!error && <button className="workspace-button" disabled={creating} onClick={onCreate}>Create your first document</button>}
-        </section>
-      ) : visibleDocuments.length === 0 ? (
-        <section className="dashboard-empty"><h2>No matching documents</h2>
-          <button className="dashboard-secondary" onClick={() => { setQuery(""); setScope("all"); }}>Clear filters</button>
-        </section>
-      ) : (
-        <>
-          <p className="dashboard-result-count" role="status">{visibleDocuments.length} of {documents.length} documents</p>
-          <div className="dashboard-table-scroll" role="region" aria-label="Documents" tabIndex={0}>
-            <table className="dashboard-table">
-              <thead><tr><th scope="col">Document</th><th scope="col">Owner</th><th scope="col">Collaborators</th><th scope="col">Created</th><th scope="col">Last edited</th></tr></thead>
-              <tbody>{visibleDocuments.map((document) => {
-                const people = document.collaborators || [];
-                return <tr key={document.id}>
-                  <td><button className="dashboard-document-link" onClick={() => onOpen(document.id)}>{document.title || "Untitled document"}</button>
-                    <span className="dashboard-muted">{isOwner(document, session) ? "Owned by you" : "Shared with you"}</span></td>
-                  <td><span>{document.ownerName || document.ownerEmail || "Unknown owner"}</span>
-                    <span className="dashboard-muted">{document.ownerEmail}</span></td>
-                  <td>{people.length ? <><span>{people.length} {people.length === 1 ? "collaborator" : "collaborators"}</span>
-                    <span className="dashboard-muted">{people.slice(0, 2).map((person) => person.name || person.email).join(", ")}{people.length > 2 ? ` +${people.length - 2}` : ""}</span></>
-                    : <span className="dashboard-muted">No collaborators</span>}</td>
-                  <td><DocumentDate value={document.createdAt} /></td>
-                  <td><DocumentDate value={document.updatedAt || document.createdAt} />
-                    {document.lastEditedByName && <span className="dashboard-muted">{document.lastEditedByName}</span>}</td>
-                </tr>;
-              })}</tbody>
-            </table>
+      {error ? <p className="editor-banner editor-banner-error" role="alert">{error}</p> : null}
+
+      <div className="dashboard-library">
+        <div className="dashboard-toolbar">
+          <div className="dashboard-scopes" role="group" aria-label="Document ownership">
+            {[["all", "All documents", documents.length], ["owned", "Owned by me", ownedCount],
+              ["shared", "Shared with me", documents.length - ownedCount]].map(([value, label, count]) => (
+              <button key={value} aria-pressed={scope === value} onClick={() => setScope(value)}>
+                {label} <span>{count}</span>
+              </button>
+            ))}
           </div>
-        </>
-      )}
+          <div className="dashboard-controls">
+            <label>Search documents
+              <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Title, owner or collaborator" />
+            </label>
+            <label>Sort by
+              <select value={sort} onChange={(event) => setSort(event.target.value)}>
+                <option value="updated">Last edited</option><option value="created">Newest created</option><option value="title">Title A-Z</option>
+              </select>
+            </label>
+            <button className="dashboard-secondary" disabled={loading} onClick={onRefresh}>{loading ? "Refreshing..." : "Refresh documents"}</button>
+          </div>
+        </div>
+
+        {loading ? <p role="status" className="dashboard-empty">Loading documents...</p> : documents.length === 0 ? (
+          <section className="dashboard-empty"><h2>{error ? "Documents unavailable" : "No documents yet"}</h2>
+            {!error && <button className="workspace-button" disabled={creating} onClick={onCreate}>Create your first document</button>}
+          </section>
+        ) : visibleDocuments.length === 0 ? (
+          <section className="dashboard-empty"><h2>No matching documents</h2>
+            <button className="dashboard-secondary" onClick={() => { setQuery(""); setScope("all"); }}>Clear filters</button>
+          </section>
+        ) : (
+          <>
+            <p className="dashboard-result-count" role="status">{visibleDocuments.length} of {documents.length} documents</p>
+            <div className="dashboard-table-scroll" role="region" aria-label="Documents" tabIndex={0}>
+              <table className="dashboard-table">
+                <thead><tr><th scope="col">Document</th><th scope="col">Owner</th><th scope="col">Collaborators</th><th scope="col">Created</th><th scope="col">Last edited</th></tr></thead>
+                <tbody>{visibleDocuments.map((document) => {
+                  const people = document.collaborators || [];
+                  return <tr key={document.id}>
+                    <td>
+                      <div className="dashboard-document">
+                        <span className="dashboard-document-icon" aria-hidden="true">
+                          <svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z M14 3v5h4 M9 12h6 M9 16h6" /></svg>
+                        </span>
+                        <div>
+                          <button className="dashboard-document-link" type="button" onClick={() => onOpen(document.id)}>
+                            {document.title || "Untitled document"}
+                          </button>
+                          <span className="dashboard-muted">{isOwner(document, session) ? "Owned by you" : "Shared with you"}</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td><span>{document.ownerName || document.ownerEmail || "Unknown owner"}</span>
+                      <span className="dashboard-muted">{document.ownerEmail}</span></td>
+                    <td>{people.length ? <><span>{people.length} {people.length === 1 ? "collaborator" : "collaborators"}</span>
+                      <span className="dashboard-muted">{people.slice(0, 2).map((person) => person.name || person.email).join(", ")}{people.length > 2 ? ` +${people.length - 2}` : ""}</span></>
+                      : <span className="dashboard-muted">No collaborators</span>}</td>
+                    <td><DocumentDate value={document.createdAt} /></td>
+                    <td><DocumentDate value={document.updatedAt || document.createdAt} />
+                      {document.lastEditedByName && <span className="dashboard-muted">{document.lastEditedByName}</span>}</td>
+                  </tr>;
+                })}</tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
     </main>
   );
 }

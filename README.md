@@ -1,6 +1,6 @@
-# Realtime Collab App
+# CollabLoop
 
-A full-stack real-time collaborative document editor with a Spring Boot backend and React frontend.
+A real-time workspace for writing documents and explaining ideas on a shared whiteboard, built with Spring Boot and React.
 
 The backend lives at the repository root. The React frontend lives in [`frontend/`](frontend/).
 
@@ -12,6 +12,9 @@ The backend lives at the repository root. The React frontend lives in [`frontend
 - STOMP-over-WebSocket live document editing
 - Active collaborator presence over WebSocket
 - Document version history
+- Shared whiteboard with drawing tools, colours, shapes, erasing, and undo
+- A4 document pages with automatic overflow and Word downloads
+- Product landing page and a spacious editor with a maximize option
 - PostgreSQL persistence with Flyway migrations
 
 ## Running Locally
@@ -45,10 +48,11 @@ Create a local `frontend/.env` only if you need to override those values.
 
 For hosting setup, see [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
-Recorded hosting URLs: [frontend](https://realtime-collab-frontend.onrender.com)
-and [backend health](https://realtime-collab-backend-6bbk.onrender.com/actuator/health).
-Check Render for the deployed commit; local improvements are not published until
-they are committed, pushed and deployed.
+The app is hosted on an Oracle VM at [CollabLoop](https://collabloop.129-225-102-84.sslip.io/).
+See the [Oracle deployment guide](deploy/oracle/README.md) for release and rollback
+instructions. The [source repository](https://github.com/shank1729/collabloop)
+contains both the backend and frontend. Render deployment addresses remain
+documented in the deployment guide as a fallback.
 
 Backend env templates are references for terminal/Eclipse/Render configuration;
 Spring does not load a root `.env` automatically. The frontend templates are

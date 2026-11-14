@@ -15,7 +15,7 @@ import java.util.regex.Pattern;
 
 @Component
 public class DocumentTopicAuthorization {
-    private static final Pattern TOPIC = Pattern.compile("^/topic/documents/(\\d+)(?:/presence)?$");
+    private static final Pattern TOPIC = Pattern.compile("^/topic/documents/(\\d+)(?:/(?:presence|whiteboard))?$");
     private final DocumentRepository documents;
     private final Map<String, String> usersBySession = new ConcurrentHashMap<>();
 

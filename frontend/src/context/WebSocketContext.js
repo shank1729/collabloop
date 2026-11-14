@@ -216,6 +216,19 @@ export const WebSocketProvider = ({ children, token }) => {
     return publishJson("/app/editDocument", documentUpdate);
   }, [publishJson]);
 
+  const subscribeToWhiteboard = useCallback((documentId, onChange) => {
+    const client = clientRef.current;
+    if (!client?.connected) return undefined;
+    let active = true;
+    const subscription = client.subscribe(`/topic/documents/${documentId}/whiteboard`, () => {
+      if (active && clientRef.current === client) onChange();
+    });
+    return () => {
+      active = false;
+      if (client.connected) subscription.unsubscribe();
+    };
+  }, []);
+
   const sendPresenceTyping = useCallback((documentId) => {
     if (documentId !== activeDocumentRef.current || !clientRef.current?.connected) return;
     const now = Date.now();
@@ -250,6 +263,7 @@ export const WebSocketProvider = ({ children, token }) => {
         sendPresenceViewing,
         sendUpdate,
         subscribeToDocument,
+        subscribeToWhiteboard,
       }}
     >
       {children}

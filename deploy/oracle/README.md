@@ -1,7 +1,8 @@
 # Oracle VM deployment
 
 The app is running on an Always Free `VM.Standard.E2.1.Micro` Ubuntu 24.04 Minimal
-VM in Hyderabad at [collab.129-225-102-84.sslip.io](https://collab.129-225-102-84.sslip.io/).
+VM in Hyderabad at [collabloop.129-225-102-84.sslip.io](https://collabloop.129-225-102-84.sslip.io/).
+The [previous address](https://collab.129-225-102-84.sslip.io/) also serves the app.
 The public frontend, API health endpoint, and SockJS WebSocket connection have
 been verified. Use the two-user smoke checklist below to verify signed-in collaboration.
 
@@ -75,8 +76,8 @@ build on that VM. This package does not require Node, Java or PostgreSQL install
 on the host. Allow sufficient free RAM/disk for the Node and Maven build stages.
 
 Transfer a reviewed source snapshot to a dedicated directory, or clone a
-reviewed, pushed commit. The current local improvements are uncommitted, so
-cloning the current GitHub main alone will not include them. Exclude `.git`,
+reviewed commit from [shank1729/collabloop](https://github.com/shank1729/collabloop).
+Exclude `.git`,
 local env files, SSH keys, node_modules, build output and logs from a source
 archive. Do not overwrite an existing application directory without inspection.
 
@@ -105,7 +106,7 @@ or print a rendered Compose configuration containing secrets into shared logs.
 The 1 GB E2 Micro cannot use the 2 GB backend configuration below. Use the
 standalone `compose.micro.yaml` instead. Build the backend JAR and frontend on
 your development machine, with `REACT_APP_API_BASE_URL=/api` and
-`REACT_APP_WS_URL=https://YOUR_HOST/ws` for the React build. Transfer the JAR as
+`REACT_APP_WS_URL=/ws` for the React build so each hostname connects back to itself. Transfer the JAR as
 `deploy/oracle/release/app.jar` and the React build directory contents as
 `deploy/oracle/release/frontend/` on the VM. Neither artifact contains the Neon
 password or signing key; those belong only in the VM's protected `.env` file.
@@ -146,8 +147,9 @@ sudo docker compose --env-file .env run --rm --no-deps gateway \
   caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 ```
 
-The gateway may briefly return 502 while Spring connects to Neon and finishes
-starting. `docker compose ps` alone does not prove the app is ready. Verify the
+The gateway may return 502 while Spring connects to Neon and finishes starting.
+Allow several minutes on the E2 Micro before deciding that a restart failed.
+`docker compose ps` alone does not prove the app is ready. Verify the
 public HTTPS endpoint, without disabling certificate verification:
 
 ```sh
@@ -172,11 +174,14 @@ volumes hold certificates. Arrange provider backups and keep a secure copy of
 the deployment env outside the VM, because a free VM can be reclaimed.
 
 For updates, preserve the old source snapshot/commit and `.env`, review/test the
-new source, rebuild and recreate containers. A hostname change also needs a
-frontend rebuild because its WebSocket URL is baked into JavaScript. Keep the
-old Render deployment as a fallback until Oracle smoke checks pass. Do not run
+new source, rebuild and recreate containers. To keep two hostnames working, set
+`APP_SITE_ADDRESSES` to a space-separated list of hostnames and
+`APP_ALLOWED_ORIGINS` to the corresponding comma-separated HTTPS origins (see
+`env.example`). Sessions are stored per hostname in the browser, so users may
+need to sign in again when they switch URLs. Keep the old Render deployment as
+a fallback until Oracle smoke checks pass. Do not run
 `docker compose down -v` as a routine update: it removes certificate volumes.
 
-Deploying source does not require a GitHub push. Publishing the accumulated
-changes is a separate reviewable action; pushing the Render deployment branch
+Deploying source does not require a GitHub push. Publishing source to GitHub
+is separate from updating the VM; pushing the Render deployment branch
 may also trigger Render auto-deploy. No cloud resources are created by these files.

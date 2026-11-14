@@ -1,0 +1,137 @@
+.document-view-toggle,
+.whiteboard-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.document-view-toggle button[aria-pressed="true"],
+.whiteboard-tool[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.whiteboard-toolbar {
+  background: #f7f9fc;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px 0;
+  margin-bottom: 0.75rem;
+}
+
+.whiteboard-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.875rem;
+  padding: 6px 9px;
+  cursor: pointer;
+}
+
+.whiteboard-tool svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.65;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.whiteboard-colors {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.whiteboard-colors button,
+.whiteboard-colors input {
+  width: 29px;
+  height: 29px;
+  padding: 0;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--swatch, #fff);
+  box-shadow: 0 0 0 1px var(--border);
+  cursor: pointer;
+}
+
+.whiteboard-colors button[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px var(--text);
+}
+
+.whiteboard-colors input {
+  padding: 2px;
+}
+
+.whiteboard-status {
+  font-size: 0.875rem;
+  margin: 0 0 0.75rem;
+}
+
+.whiteboard-tools label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.875rem;
+}
+
+.whiteboard-tools select {
+  font: inherit;
+  padding: 0.35rem;
+}
+
+.whiteboard-tools .whiteboard-undo:disabled {
+  cursor: default;
+}
+
+.whiteboard-tools .whiteboard-undo[aria-busy="true"] {
+  cursor: wait;
+}
+
+.whiteboard-surface {
+  background-color: #fff;
+  background-image: radial-gradient(#d5dae2 1px, transparent 1px);
+  background-size: 18px 18px;
+  border: 1px solid #ccd3df;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  margin-bottom: 0.75rem;
+}
+
+.whiteboard-surface svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.workspace-surface-maximized .whiteboard-surface {
+  width: min(100%, max(26rem, calc((100dvh - 15rem) * 1.6667)));
+  margin-inline: auto;
+}
+
+.workspace-surface-maximized .document-view-toggle {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--card-bg);
+  padding-block: 6px;
+}
+
+.whiteboard-drawable {
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.whiteboard-eraser {
+  cursor: cell;
+}

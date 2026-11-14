@@ -1,10 +1,14 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import DocumentDashboard from "./DocumentDashboard";
 import SharingPanel from "./SharingPanel";
 import PresencePanel from "./PresencePanel";
 import VersionHistoryPanel from "./VersionHistoryPanel";
 import VersionPreview from "./VersionPreview";
+import DocumentPages from "./DocumentPages";
+import DocumentDownloadButton from "./DocumentDownloadButton";
+import Whiteboard from "./Whiteboard";
 import { useWebSocket } from "../context/WebSocketContext";
+import BrandLockup from "./BrandLockup";
 import {
   createDocument,
   deleteDocument,
@@ -28,7 +32,7 @@ function normalizeRole(role) {
   return rawRole.toUpperCase().replace(/^ROLE_/, "");
 }
 
-export default function DocumentEditor({ session, onLogout }) {
+export default function DocumentEditor({ session, onLogout, selectedDocumentId, showWhiteboard, navigate }) {
   const {
     connected,
     lastMessage,
@@ -40,10 +44,9 @@ export default function DocumentEditor({ session, onLogout }) {
     subscribeToDocument,
   } = useWebSocket();
   const [documents, setDocuments] = useState([]);
-  const [showDashboard, setShowDashboard] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [documentLoading, setDocumentLoading] = useState(false);
-  const [selectedDocumentId, setSelectedDocumentId] = useState(null);
+  const [loadedDocumentId, setLoadedDocumentId] = useState(null);
+  const [documentError, setDocumentError] = useState("");
   const [title, setTitle] = useState("");
   const [titleDraft, setTitleDraft] = useState("");
   const [titleSaving, setTitleSaving] = useState(false);
@@ -51,19 +54,57 @@ export default function DocumentEditor({ session, onLogout }) {
   const [deleteError, setDeleteError] = useState("");
   const [titleStatus, setTitleStatus] = useState("");
   const [content, setContent] = useState("");
-  const [updatedAt, setUpdatedAt] = useState("");
   const [collaborators, setCollaborators] = useState([]);
   const [versionNumber, setVersionNumber] = useState(null);
-  const [lastEditedByName, setLastEditedByName] = useState("");
   const [previewVersion, setPreviewVersion] = useState(null);
+  const [maximized, setMaximized] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [syncStatus, setSyncStatus] = useState("Loading documents...");
   const [sharingPending, setSharingPending] = useState(false);
   const debounceTimerRef = useRef(null);
   const pendingUpdateRef = useRef(null);
   const handledAccessMessage = useRef(null);
+  const maximizeButton = useRef(null);
+  const activeDocumentId = useRef();
+  const showDashboard = selectedDocumentId == null;
+  const documentLoading = !showDashboard && loadedDocumentId !== selectedDocumentId;
   const mutationPending = titleSaving || deleting || sharingPending;
+
+  const flushPendingUpdate = useCallback(() => {
+    clearTimeout(debounceTimerRef.current);
+    if (pendingUpdateRef.current) sendUpdate(pendingUpdateRef.current);
+    pendingUpdateRef.current = null;
+  }, [sendUpdate]);
+
+  useLayoutEffect(() => {
+    activeDocumentId.current = selectedDocumentId;
+    setLoadedDocumentId(null);
+    setDocumentError("");
+    setDeleteError("");
+    setPreviewVersion(null);
+    setMaximized(false);
+    // Back and Forward must flush text while the old socket subscription is still active.
+    return () => {
+      activeDocumentId.current = undefined;
+      flushPendingUpdate();
+    };
+  }, [selectedDocumentId, flushPendingUpdate]);
+
+  useEffect(() => {
+    if (!maximized || showDashboard || documentError || documentLoading) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const exitOnEscape = (event) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      setMaximized(false);
+      maximizeButton.current?.focus();
+    };
+    document.addEventListener("keydown", exitOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", exitOnEscape);
+    };
+  }, [maximized, showDashboard, documentError, documentLoading]);
 
   const selectedDocument = useMemo(
     () => documents.find((document) => document.id === selectedDocumentId) || null,
@@ -110,10 +151,8 @@ export default function DocumentEditor({ session, onLogout }) {
 
       const workspaceDocuments = await getDocuments();
       setDocuments(workspaceDocuments);
-      setSyncStatus("Workspace loaded");
     } catch (loadError) {
       setError(loadError.message || "Unable to load your documents.");
-      setSyncStatus("Could not load workspace");
     } finally {
       setLoading(false);
     }
@@ -131,7 +170,6 @@ export default function DocumentEditor({ session, onLogout }) {
       }
 
       try {
-        setDocumentLoading(true);
         const document = await getDocumentById(selectedDocumentId);
         if (!active) return;
         const loadedTitle = document.title || "Untitled document";
@@ -139,22 +177,19 @@ export default function DocumentEditor({ session, onLogout }) {
         setTitleDraft(loadedTitle);
         setTitleStatus("");
         setContent(document.content || "");
-        setUpdatedAt(document.updatedAt || document.createdAt || "");
         setCollaborators(document.collaborators || []);
         setVersionNumber(document.version ?? null);
-        setLastEditedByName(document.lastEditedByName || "");
         setDocuments((prev) =>
-          prev.map((workspaceDocument) =>
+          prev.some((item) => item.id === document.id) ? prev.map((workspaceDocument) =>
             workspaceDocument.id === document.id
               ? { ...workspaceDocument, ...document }
               : workspaceDocument
-          )
+          ) : [...prev, document]
         );
-        setSyncStatus("Document loaded");
       } catch (loadError) {
-        if (active) setError(loadError.message || "Unable to load the selected document.");
+        if (active) setDocumentError(loadError.message || "Unable to load the selected document.");
       } finally {
-        if (active) setDocumentLoading(false);
+        if (active) setLoadedDocumentId(selectedDocumentId);
       }
     };
 
@@ -163,10 +198,10 @@ export default function DocumentEditor({ session, onLogout }) {
   }, [selectedDocumentId, showDashboard]);
 
   useEffect(() => {
-    if (!connected || showDashboard || error || !selectedDocumentId) return;
+    if (!connected || showDashboard || documentError || documentLoading) return;
     subscribeToDocument(selectedDocumentId);
     return () => unsubscribeFromDocument();
-  }, [connected, showDashboard, error, selectedDocumentId, subscribeToDocument, unsubscribeFromDocument]);
+  }, [connected, showDashboard, documentError, documentLoading, selectedDocumentId, subscribeToDocument, unsubscribeFromDocument]);
 
   useEffect(() => {
     if (!accessMessage || handledAccessMessage.current === accessMessage) return;
@@ -181,9 +216,7 @@ export default function DocumentEditor({ session, onLogout }) {
       if (selectedDocumentId === documentId) {
         unsubscribeFromDocument();
         setContent("");
-        setPreviewVersion(null);
-        setSelectedDocumentId(null);
-        setShowDashboard(true);
+        navigate("workspace", { replace: true });
         setError("Your access to this document was removed.");
       }
     } else {
@@ -194,43 +227,24 @@ export default function DocumentEditor({ session, onLogout }) {
         ? { ...document, collaborators: updatePeople(document.collaborators) } : document));
       if (selectedDocumentId === documentId) setCollaborators(updatePeople);
     }
-  }, [accessMessage, selectedDocumentId, session.email, unsubscribeFromDocument]);
+  }, [accessMessage, selectedDocumentId, session.email, unsubscribeFromDocument, navigate]);
 
   useEffect(() => {
     if (selectedDocumentId && lastMessage && lastMessage.id === selectedDocumentId) {
       setContent(lastMessage.content || "");
-      setUpdatedAt(lastMessage.updatedAt || new Date().toISOString());
       setVersionNumber(lastMessage.version ?? versionNumber);
       setDocuments((prev) => prev.map((document) => document.id === lastMessage.id
         ? { ...document, ...lastMessage } : document));
-      setSyncStatus(isViewer ? "Read-only access" : "Synced live");
     }
-  }, [isViewer, lastMessage, selectedDocumentId, versionNumber]);
+  }, [lastMessage, selectedDocumentId, versionNumber]);
 
-  useEffect(() => {
-    if (isViewer) {
-      setSyncStatus("Read-only access");
-    }
-  }, [isViewer, selectedDocumentId]);
-
-  useEffect(() => {
-    return () => {
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
-      }
-    };
-  }, []);
-
-  const handleChange = (event) => {
+  const handleChange = (nextContent) => {
     if (!canEditDocument) {
-      setSyncStatus("Read-only access");
       return;
     }
 
-    const nextContent = event.target.value;
     pendingUpdateRef.current = { id: selectedDocumentId, content: nextContent };
     setContent(nextContent);
-    setSyncStatus(connected ? "Typing..." : "Offline changes");
 
     if (connected) {
       sendPresenceTyping(selectedDocumentId);
@@ -243,15 +257,7 @@ export default function DocumentEditor({ session, onLogout }) {
     debounceTimerRef.current = setTimeout(() => {
       if (pendingUpdateRef.current) sendUpdate(pendingUpdateRef.current);
       pendingUpdateRef.current = null;
-      setUpdatedAt(new Date().toISOString());
-      setSyncStatus(connected ? "Live update sent" : "Waiting for connection");
     }, 300);
-  };
-
-  const flushPendingUpdate = () => {
-    clearTimeout(debounceTimerRef.current);
-    if (pendingUpdateRef.current) sendUpdate(pendingUpdateRef.current);
-    pendingUpdateRef.current = null;
   };
 
   const handleTitleSubmit = async (event) => {
@@ -284,23 +290,18 @@ export default function DocumentEditor({ session, onLogout }) {
       const updatedDocument = await patchDocument(selectedDocumentId, {
         title: nextTitle,
       });
+      setDocuments((prev) => prev.map((document) => document.id === updatedDocument.id
+        ? { ...document, ...updatedDocument } : document));
+      if (activeDocumentId.current !== selectedDocumentId) return;
       setTitle(updatedDocument.title || nextTitle);
       setTitleDraft(updatedDocument.title || nextTitle);
-      setUpdatedAt(updatedDocument.updatedAt || new Date().toISOString());
       setVersionNumber(updatedDocument.version ?? versionNumber);
-      setLastEditedByName(updatedDocument.lastEditedByName || lastEditedByName);
       setCollaborators(updatedDocument.collaborators || collaborators);
-      setDocuments((prev) =>
-        prev.map((document) =>
-          document.id === updatedDocument.id
-            ? { ...document, ...updatedDocument }
-            : document
-        )
-      );
       setTitleStatus("Title saved");
-      setSyncStatus("Document renamed");
     } catch (renameError) {
-      setTitleStatus(renameError.message || "Unable to rename the document.");
+      if (activeDocumentId.current === selectedDocumentId) {
+        setTitleStatus(renameError.message || "Unable to rename the document.");
+      }
     } finally {
       setTitleSaving(false);
     }
@@ -316,12 +317,8 @@ export default function DocumentEditor({ session, onLogout }) {
         content: "Start writing here...",
       });
       setDocuments((prev) => [newDocument, ...prev]);
-      flushPendingUpdate();
-      setSelectedDocumentId(newDocument.id);
-      setPreviewVersion(null);
-      setDocumentLoading(true);
-      setShowDashboard(false);
-      setSyncStatus("New document created");
+      if (activeDocumentId.current !== null) return;
+      navigate("workspace", { documentId: newDocument.id });
     } catch (createError) {
       setError(createError.message || "Unable to create a new document.");
     } finally {
@@ -332,12 +329,12 @@ export default function DocumentEditor({ session, onLogout }) {
   const handleDeleteDocument = async () => {
     if (mutationPending) return;
     if (!selectedDocumentId || !canManageDocument) {
-      setError("Only the document owner can delete this document.");
+      setDocumentError("Only the document owner can delete this document.");
       return;
     }
 
     const confirmed = window.confirm(
-      `Delete "${title}"? This will permanently delete the document and its version history.`
+      `Delete "${title}"? This will permanently delete the document, its version history, and its whiteboard.`
     );
 
     if (!confirmed) {
@@ -348,47 +345,40 @@ export default function DocumentEditor({ session, onLogout }) {
       setDeleting(true);
       setDeleteError("");
       await deleteDocument(selectedDocumentId);
+      setDocuments((prev) => prev.filter((document) => document.id !== selectedDocumentId));
+      if (activeDocumentId.current !== selectedDocumentId) return;
       clearTimeout(debounceTimerRef.current);
       pendingUpdateRef.current = null;
 
-      const remainingDocuments = documents.filter(
-        (document) => document.id !== selectedDocumentId
-      );
+      navigate("workspace", { replace: true });
 
-      setDocuments(remainingDocuments);
-      setSelectedDocumentId(null);
-      setShowDashboard(true);
-
-      setSyncStatus("Document deleted");
     } catch (deleteError) {
-      setDeleteError(deleteError.message || "Unable to delete the document. Please try again.");
+      if (activeDocumentId.current === selectedDocumentId) {
+        setDeleteError(deleteError.message || "Unable to delete the document. Please try again.");
+      }
     } finally {
       setDeleting(false);
     }
   };
 
-  const formattedUpdatedAt = updatedAt
-    ? new Date(updatedAt).toLocaleString()
-    : "Not available";
-
   const openDocument = (id) => {
     if (mutationPending) return;
-    flushPendingUpdate();
-    setPreviewVersion(null);
-    setDeleteError("");
     setError("");
-    setDocumentLoading(true);
-    setSelectedDocumentId(id);
-    setShowDashboard(false);
+    navigate("workspace", { documentId: id });
   };
 
   const backToDocuments = () => {
     if (mutationPending) return;
-    flushPendingUpdate();
-    setPreviewVersion(null);
     setError("");
-    setShowDashboard(true);
+    navigate("workspace");
   };
+
+  const allDocumentsButton = (
+    <button className="workspace-button workspace-back-button" type="button"
+      disabled={mutationPending} onClick={backToDocuments}>
+      <span aria-hidden="true">←</span> All documents
+    </button>
+  );
 
   if (showDashboard) {
     return <DocumentDashboard documents={documents} session={session} onOpen={openDocument}
@@ -396,23 +386,25 @@ export default function DocumentEditor({ session, onLogout }) {
       creating={creating} loading={loading} error={error} />;
   }
 
-  if (documentLoading && !error) {
+  if (documentLoading && !documentError) {
     return (
       <main className="editor-layout">
         <section className="editor-card">
+          <BrandLockup />
           <p className="editor-banner" role="status">Loading document...</p>
-          <button className="dashboard-secondary" onClick={backToDocuments}>Back to documents</button>
+          <button className="workspace-button" type="button" onClick={backToDocuments}>Back to documents</button>
         </section>
       </main>
     );
   }
 
-  if (error) {
+  if (documentError) {
     return (
       <main className="editor-layout">
         <section className="editor-card">
-          <p className="editor-banner editor-banner-error" role="alert">{error}</p>
-          <button className="dashboard-secondary" onClick={backToDocuments}>Back to documents</button>
+          <BrandLockup />
+          <p className="editor-banner editor-banner-error" role="alert">{documentError}</p>
+          <button className="workspace-button" type="button" onClick={backToDocuments}>Back to documents</button>
         </section>
       </main>
     );
@@ -420,164 +412,150 @@ export default function DocumentEditor({ session, onLogout }) {
 
   return (
     <main className="workspace-layout">
-      <aside className="workspace-sidebar">
-        <div className="workspace-sidebar-header">
-          <p className="editor-kicker">Shared workspace</p>
-          <h2>Your documents</h2>
-          <button className="dashboard-secondary" type="button" disabled={mutationPending} onClick={backToDocuments}>All documents</button>
-          <button className="workspace-button" type="button" disabled={creating || mutationPending} onClick={handleCreateDocument}>
-            {creating ? "Creating..." : "New document"}
-          </button>
-        </div>
-
-        <div className="workspace-list">
-          {documents.map((document) => (
-            <button
-              key={document.id}
-              type="button"
-              disabled={mutationPending}
-              className={
-                document.id === selectedDocumentId
-                  ? "workspace-list-item workspace-list-item-active"
-                  : "workspace-list-item"
-              }
-              onClick={() => { if (document.id !== selectedDocumentId) openDocument(document.id); }}
-            >
-              <strong>{document.title}</strong>
-              <span>{document.ownerName || "Owner unavailable"}</span>
-            </button>
-          ))}
-        </div>
-      </aside>
-
       <section className="editor-card workspace-editor-card">
-        <div className="editor-header">
-          <div>
-            <p className="editor-kicker">Real-time collaboration</p>
-            <form className="document-title-form" onSubmit={handleTitleSubmit}>
-              <label className="document-title-label" htmlFor="document-title">
-                Document title
-              </label>
-              <div className="document-title-row">
-                <input
-                  id="document-title"
-                  className="document-title-input"
-                  value={titleDraft}
-                  onChange={(event) => {
-                    setTitleDraft(event.target.value);
-                    setTitleStatus("");
-                  }}
-                  disabled={!canEditDocument || mutationPending}
-                  maxLength={255}
-                />
-                {canEditDocument ? (
-                  <button
-                    className="workspace-button document-title-button"
-                    type="submit"
-                    disabled={mutationPending || titleDraft.trim() === title}
-                  >
-                    {titleSaving ? "Saving" : "Save"}
-                  </button>
+        <nav className="workspace-nav" aria-label="Workspace navigation" inert={maximized} aria-hidden={maximized || undefined}>
+          <BrandLockup />
+          {allDocumentsButton}
+        </nav>
+        <div inert={maximized}>
+          <div className="editor-header">
+            <div>
+              <form className="document-title-form" onSubmit={handleTitleSubmit}>
+                <div className="document-title-row">
+                  <input
+                    aria-label="Document title"
+                    className="document-title-input"
+                    value={titleDraft}
+                    onChange={(event) => {
+                      setTitleDraft(event.target.value);
+                      setTitleStatus("");
+                    }}
+                    disabled={!canEditDocument || mutationPending}
+                    maxLength={255}
+                  />
+                  {canEditDocument ? (
+                    <button
+                      className="workspace-button document-title-button"
+                      type="submit"
+                      disabled={mutationPending || titleDraft.trim() === title}
+                    >
+                      {titleSaving ? "Saving" : "Save"}
+                    </button>
+                  ) : null}
+                </div>
+                {titleStatus ? (
+                  <p className="document-title-status" role="status">{titleStatus}</p>
                 ) : null}
-              </div>
-              {titleStatus ? (
-                <p className="document-title-status" role="status">{titleStatus}</p>
+              </form>
+            </div>
+            <div className="editor-status-group">
+              <span className={`editor-pill editor-pill-role-${currentUserRole.toLowerCase()}`}>
+                {currentRoleLabel}
+              </span>
+              <span
+                className={
+                  connected
+                    ? "editor-pill editor-pill-connected"
+                    : "editor-pill editor-pill-disconnected"
+                }
+              >
+                {connected ? "Connected" : "Disconnected"}
+              </span>
+              {canManageDocument ? (
+                <button
+                  className="editor-pill editor-pill-danger"
+                  onClick={handleDeleteDocument}
+                  type="button"
+                  disabled={mutationPending}
+                >
+                  {deleting ? "Deleting..." : "Delete document"}
+                </button>
               ) : null}
-            </form>
-            <p className="editor-meta">
-              Signed in as {session.name} ({session.email})
-            </p>
-            <p className="editor-meta">
-              Document #{selectedDocumentId} | Last updated {formattedUpdatedAt}
-            </p>
-            <p className="editor-meta">
-              Version {versionNumber ?? "n/a"} | Last edited by {lastEditedByName || "Unknown"}
-            </p>
-          </div>
-          <div className="editor-status-group">
-            <span className={`editor-pill editor-pill-role-${currentUserRole.toLowerCase()}`}>
-              {currentRoleLabel}
-            </span>
-            <span
-              className={
-                connected
-                  ? "editor-pill editor-pill-connected"
-                  : "editor-pill editor-pill-disconnected"
-              }
-            >
-              {connected ? "Connected" : "Disconnected"}
-            </span>
-            <span className="editor-pill editor-pill-neutral">{syncStatus}</span>
-            {canManageDocument ? (
               <button
-                className="editor-pill editor-pill-danger"
-                onClick={handleDeleteDocument}
+                className="editor-pill editor-pill-action"
+                onClick={() => { flushPendingUpdate(); onLogout(); }}
                 type="button"
                 disabled={mutationPending}
               >
-                {deleting ? "Deleting..." : "Delete document"}
+                Sign out
               </button>
-            ) : null}
-            <button
-              className="editor-pill editor-pill-action"
-              onClick={() => { flushPendingUpdate(); onLogout(); }}
-              type="button"
-              disabled={mutationPending}
-            >
-              Sign out
-            </button>
+            </div>
           </div>
-        </div>
 
-        {deleteError ? <p className="editor-banner editor-banner-error" role="alert">{deleteError}</p> : null}
-        <div className="workspace-meta-row">
-          <div className="workspace-owner-panel">
-            <span className="workspace-section-title">Document owner</span>
-            <strong>{selectedDocument?.ownerName || "Unknown"}</strong>
-            <span>{selectedDocument?.ownerEmail || "Unknown"}</span>
-            {isViewer ? (
-              <p className="workspace-readonly-note">
-                You can view this document, but editing and sharing are owner-controlled.
-              </p>
-            ) : null}
-          </div>
+          {deleteError ? <p className="editor-banner editor-banner-error" role="alert">{deleteError}</p> : null}
+          <details className="workspace-sharing-details" key={selectedDocumentId}>
+            <summary>Sharing and access</summary>
+            <div className="workspace-meta-row">
+              <div className="workspace-owner-panel">
+                <span className="workspace-section-title">Document owner</span>
+                <strong>{selectedDocument?.ownerName || "Unknown"}</strong>
+                <span>{selectedDocument?.ownerEmail || "Unknown"}</span>
+                {isViewer ? (
+                  <p className="workspace-readonly-note">
+                    You can view this document, but editing and sharing are owner-controlled.
+                  </p>
+                ) : null}
+              </div>
+            </div>
+            <SharingPanel key={selectedDocumentId} documentId={selectedDocumentId}
+              collaborators={collaborators} canManage={canManageDocument}
+              disabled={titleSaving || deleting} onPendingChange={setSharingPending}
+              onChange={(document) => {
+                setCollaborators(document.collaborators || []);
+                setDocuments((prev) => prev.map((item) => item.id === document.id ? { ...item, ...document } : item));
+              }} />
+          </details>
         </div>
-        <SharingPanel key={selectedDocumentId} documentId={selectedDocumentId}
-          collaborators={collaborators} canManage={canManageDocument}
-          disabled={titleSaving || deleting} onPendingChange={setSharingPending}
-          onChange={(document) => {
-            setCollaborators(document.collaborators || []);
-            setDocuments((prev) => prev.map((item) => item.id === document.id ? { ...item, ...document } : item));
-          }} />
 
         <div className="workspace-editor-grid">
-          <div>
-            {previewVersion ? <VersionPreview version={previewVersion} onClose={() => setPreviewVersion(null)} /> : <>
-            <label className="editor-label" htmlFor="document-content">
-              Document content
-            </label>
-            <textarea
-              id="document-content"
-              value={content}
-              onChange={handleChange}
-              disabled={!canEditDocument || deleting}
-              rows={14}
-              className={canEditDocument ? "editor-textarea" : "editor-textarea editor-textarea-readonly"}
-              placeholder={
-                canEditDocument
-                  ? "Start typing to broadcast live updates..."
-                  : "Viewer access is read-only."
-              }
-            />
-            </>}
-          </div>
+          <section className={maximized ? "workspace-surface workspace-surface-maximized" : "workspace-surface"}
+            aria-label={showWhiteboard ? "Whiteboard workspace" : "Document workspace"}>
+            <div className="document-view-toggle" role="group" aria-label="Document view">
+              {maximized && (
+                <div className="workspace-maximized-nav">
+                  <BrandLockup />
+                  {allDocumentsButton}
+                </div>
+              )}
+              <button type="button" className="dashboard-secondary" aria-pressed={!showWhiteboard}
+                onClick={() => navigate("workspace", { documentId: selectedDocumentId })}>Document</button>
+              <button type="button" className="dashboard-secondary" aria-pressed={showWhiteboard}
+                onClick={() => {
+                  flushPendingUpdate();
+                  setPreviewVersion(null);
+                  navigate("workspace", { documentId: selectedDocumentId, whiteboard: true });
+                }}>Whiteboard</button>
+              {!showWhiteboard && <DocumentDownloadButton
+                title={title}
+                content={previewVersion ? previewVersion.contentSnapshot ?? "" : content}
+                versionId={previewVersion?.id} />}
+              <button type="button" ref={maximizeButton} className="dashboard-secondary workspace-maximize-button"
+                aria-pressed={maximized} onClick={() => setMaximized((value) => !value)}>
+                <span aria-hidden="true">{maximized ? "↙" : "⤢"}</span>{" "}
+                {maximized ? "Restore view" : "Maximize"}
+              </button>
+            </div>
+            {showWhiteboard ? (
+              <Whiteboard key={selectedDocumentId} documentId={selectedDocumentId}
+                userId={session.userId ?? session.id} canEdit={canEditDocument && !deleting} />
+            ) : previewVersion ? (
+              <VersionPreview version={previewVersion} onClose={() => setPreviewVersion(null)} />
+            ) : (
+              <DocumentPages key={selectedDocumentId} content={content} onChange={handleChange}
+                readOnly={!canEditDocument || deleting} />
+            )}
+          </section>
 
-          <aside className="workspace-side-panel">
+          <aside className="workspace-side-panel" inert={maximized}>
             <PresencePanel connected={connected} users={activeUsers} />
 
             <VersionHistoryPanel key={selectedDocumentId} documentId={selectedDocumentId}
               currentVersion={versionNumber} selectedId={previewVersion?.id}
-              onSelect={(version) => { flushPendingUpdate(); setPreviewVersion(version); }} />
+              onSelect={(version) => {
+                flushPendingUpdate();
+                navigate("workspace", { documentId: selectedDocumentId });
+                setPreviewVersion(version);
+              }} />
           </aside>
         </div>
       </section>

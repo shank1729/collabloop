@@ -21,7 +21,7 @@ until they are committed, pushed, and deployed.
 | Backend | [realtime-collab-backend-6bbk.onrender.com](https://realtime-collab-backend-6bbk.onrender.com) |
 | Health | [Backend health](https://realtime-collab-backend-6bbk.onrender.com/actuator/health) |
 | PostgreSQL | Neon project; credentials belong only in backend environment settings |
-| Source | [shank1729/realtime-collab-app](https://github.com/shank1729/realtime-collab-app) |
+| Source | [shank1729/collabloop](https://github.com/shank1729/collabloop) |
 
 The app currently uses one backend instance. Live presence and the simple STOMP
 broker are in memory; adding backend instances requires shared presence storage

@@ -1,16 +1,23 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { login, register } from "../services/authService";
+import BrandLockup from "./BrandLockup";
 
-export default function AuthScreen({ onAuthSuccess, initialMessage = "" }) {
-  const [mode, setMode] = useState("login");
+export default function AuthScreen({ onAuthSuccess, initialMessage = "", mode, onModeChange, onBack }) {
+  const [localMode, setLocalMode] = useState("login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [slowResponse, setSlowResponse] = useState(false);
   const [error, setError] = useState(initialMessage);
+  const active = useRef(false);
 
-  const isLogin = mode === "login";
+  const isLogin = (mode ?? localMode) === "login";
+
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
 
   useEffect(() => {
     if (!loading) return;
@@ -28,7 +35,7 @@ export default function AuthScreen({ onAuthSuccess, initialMessage = "" }) {
     try {
       const payload = isLogin ? { email, password } : { name, email, password };
       const session = isLogin ? await login(payload) : await register(payload);
-      onAuthSuccess(session);
+      if (active.current) onAuthSuccess(session);
     } catch (submitError) {
       setError(submitError.message || "Authentication failed.");
     } finally {
@@ -40,7 +47,7 @@ export default function AuthScreen({ onAuthSuccess, initialMessage = "" }) {
   return (
     <main className="auth-layout">
       <section className="auth-card">
-        <p className="auth-kicker">Collab workspace</p>
+        <BrandLockup />
         <h1>{isLogin ? "Sign in to your workspace" : "Create your account"}</h1>
         {error ? <p className="auth-error" role="alert">{error}</p> : null}
         {loading ? (
@@ -105,13 +112,18 @@ export default function AuthScreen({ onAuthSuccess, initialMessage = "" }) {
           disabled={loading}
           onClick={() => {
             setError("");
-            setMode(isLogin ? "register" : "login");
+            const nextMode = isLogin ? "register" : "login";
+            if (onModeChange) onModeChange(nextMode);
+            else setLocalMode(nextMode);
           }}
         >
           {isLogin
             ? "Need an account? Register"
             : "Already have an account? Sign in"}
         </button>
+        {onBack && (
+          <button className="auth-back" type="button" disabled={loading} onClick={onBack}>Back to home</button>
+        )}
       </section>
     </main>
   );

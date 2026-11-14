@@ -64,7 +64,6 @@ export default function VersionHistoryPanel({ documentId, currentVersion, select
           <strong>Version {entry.documentVersionNumber ?? "unknown"}</strong>
           <span>{entry.editedByName || entry.editedByEmail || "Unknown editor"}</span>
           <span>{formatHistoryDate(entry.editedAt)}</span>
-          <small>Snapshot #{entry.id}</small>
         </button>
       </li>)}
     </ol>

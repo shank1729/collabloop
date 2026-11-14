@@ -17,10 +17,12 @@ async function parseJsonResponse(response) {
       errorMessage = `Request failed with status ${response.status}`;
     }
 
-    throw new Error(errorMessage);
+    const error = new Error(errorMessage);
+    error.status = response.status;
+    throw error;
   }
 
-  return response.json();
+  return response.status === 204 ? undefined : response.json();
 }
 
 async function fetchWithAuth(path, options = {}) {
@@ -71,6 +73,44 @@ export function removeCollaborator(documentId, userId) {
 
 export function getDocumentHistory(documentId, { signal } = {}) {
   return fetchWithAuth(`/documents/${documentId}/history`, { method: "GET", signal });
+}
+
+async function whiteboardRequest(documentId, suffix = "", options = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    return await fetchWithAuth(`/documents/${documentId}/whiteboard${suffix}`, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error("The whiteboard request timed out. Try again.");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export function getWhiteboard(documentId) {
+  return whiteboardRequest(documentId);
+}
+
+export function saveWhiteboardStroke(documentId, strokeId, drawing) {
+  return whiteboardRequest(documentId, `/strokes/${strokeId}`, {
+    method: "PUT",
+    body: JSON.stringify(drawing),
+  });
+}
+
+export function undoWhiteboardStroke(documentId, strokeId) {
+  return whiteboardRequest(documentId, `/strokes/${strokeId}`, { method: "DELETE" });
+}
+
+export function eraseWhiteboardStrokes(documentId, strokeIds) {
+  return whiteboardRequest(documentId, "/erase", {
+    method: "POST",
+    body: JSON.stringify({ strokeIds }),
+  });
 }
 
 export async function deleteDocument(documentId) {

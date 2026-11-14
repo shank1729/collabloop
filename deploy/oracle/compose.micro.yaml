@@ -18,7 +18,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in deploy/oracle/.env}
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in deploy/oracle/.env}
       JWT_EXPIRATION_MS: ${JWT_EXPIRATION_MS:-86400000}
-      CORS_ALLOWED_ORIGINS: https://${APP_HOST:?Set APP_HOST in deploy/oracle/.env}
+      CORS_ALLOWED_ORIGINS: ${APP_ALLOWED_ORIGINS:-https://${APP_HOST:?Set APP_HOST in deploy/oracle/.env}}
       SERVER_FORWARD_HEADERS_STRATEGY: native
       AUTH_TRUSTED_PROXIES: '^172[.]29[.]73[.]2$$'
       AUTH_RATE_LIMIT_REQUESTS: ${AUTH_RATE_LIMIT_REQUESTS:-20}
@@ -45,7 +45,7 @@ services:
     depends_on:
       - backend
     environment:
-      APP_HOST: ${APP_HOST:?Set APP_HOST in deploy/oracle/.env}
+      APP_HOST: ${APP_SITE_ADDRESSES:-${APP_HOST:?Set APP_HOST in deploy/oracle/.env}}
       GOMEMLIMIT: 64MiB
     ports:
       - '80:80'
