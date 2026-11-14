@@ -8,8 +8,12 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
 
 public interface DocumentVersionRepository extends JpaRepository<DocumentVersion, Long> {
+    Optional<DocumentVersion> findByDocumentIdAndClientEditId(Long documentId, UUID clientEditId);
+
     @Query("""
             select v from DocumentVersion v
             left join fetch v.editedBy

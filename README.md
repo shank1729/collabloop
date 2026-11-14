@@ -12,6 +12,7 @@ The backend lives at the repository root. The React frontend lives in [`frontend
 - Document CRUD APIs
 - Role-based document sharing with Owner, Editor, and Viewer access
 - STOMP-over-WebSocket live document editing
+- Version-checked saves that merge pending typing with collaborator updates and retry safely
 - Active collaborator presence over WebSocket
 - Document version history
 - Shared whiteboard with drawing tools, colours, shapes, erasing, and undo

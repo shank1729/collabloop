@@ -107,3 +107,22 @@ auto-deploy policy; check that policy before pushing to the deployment branch.
 
 Passing tests gives evidence for the covered behavior. The hosted smoke checks
 verify the environment settings and infrastructure that local tests cannot see.
+
+## Text synchronization regressions
+
+The editor saves text through `PUT /documents/{id}/content` with a base version
+and a unique edit ID. WebSocket broadcasts carry committed snapshots. The server
+rejects stale writes with HTTP 409; the client merges its pending edits before
+retrying. Repeating an accepted edit ID returns its original acknowledgement.
+
+The automated checks include delayed acknowledgements while typing, two writers
+saving simultaneously, out-of-order snapshots, a lost response, draft recovery,
+page caret position, and IME input. `ContentSynchronizationTest` checks concurrent
+HTTP requests, stale-write rejection, idempotency, viewer permissions and clearing
+a document. It can also run against PostgreSQL via `collab.test.database-url`
+with the PostgreSQL datasource driver, dialect and credentials overridden.
+
+For the hosted smoke check, refresh both browsers, open the same disposable shared
+document as owner and editor, and type in both. Keep typing while saves complete;
+verify that both drafts converge and remain intact after reloading. Repeat with
+network throttling and a brief disconnection, then remove the disposable document.

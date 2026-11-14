@@ -9,12 +9,14 @@ import DocumentDownloadButton from "./DocumentDownloadButton";
 import Whiteboard from "./Whiteboard";
 import { useWebSocket } from "../context/WebSocketContext";
 import BrandLockup from "./BrandLockup";
+import { createDocumentSync } from "../documentSync";
 import {
   createDocument,
   deleteDocument,
   getDocumentById,
   getDocuments,
   patchDocument,
+  saveDocumentContent,
 } from "../services/documentService";
 
 const roleLabels = {
@@ -40,7 +42,6 @@ export default function DocumentEditor({ session, onLogout, selectedDocumentId, 
     accessMessage,
     unsubscribeFromDocument,
     sendPresenceTyping,
-    sendUpdate,
     subscribeToDocument,
   } = useWebSocket();
   const [documents, setDocuments] = useState([]);
@@ -61,8 +62,8 @@ export default function DocumentEditor({ session, onLogout, selectedDocumentId, 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [sharingPending, setSharingPending] = useState(false);
-  const debounceTimerRef = useRef(null);
-  const pendingUpdateRef = useRef(null);
+  const syncRef = useRef(null);
+  const [syncStatus, setSyncStatus] = useState({ state: "saved", message: "All changes saved" });
   const handledAccessMessage = useRef(null);
   const maximizeButton = useRef(null);
   const activeDocumentId = useRef();
@@ -71,10 +72,8 @@ export default function DocumentEditor({ session, onLogout, selectedDocumentId, 
   const mutationPending = titleSaving || deleting || sharingPending;
 
   const flushPendingUpdate = useCallback(() => {
-    clearTimeout(debounceTimerRef.current);
-    if (pendingUpdateRef.current) sendUpdate(pendingUpdateRef.current);
-    pendingUpdateRef.current = null;
-  }, [sendUpdate]);
+    syncRef.current?.flush();
+  }, []);
 
   useLayoutEffect(() => {
     activeDocumentId.current = selectedDocumentId;
@@ -83,10 +82,11 @@ export default function DocumentEditor({ session, onLogout, selectedDocumentId, 
     setDeleteError("");
     setPreviewVersion(null);
     setMaximized(false);
-    // Back and Forward must flush text while the old socket subscription is still active.
+    // Finish saving the previous document independently of its socket subscription.
     return () => {
       activeDocumentId.current = undefined;
-      flushPendingUpdate();
+      syncRef.current?.close();
+      syncRef.current = null;
     };
   }, [selectedDocumentId, flushPendingUpdate]);
 
@@ -164,6 +164,7 @@ export default function DocumentEditor({ session, onLogout, selectedDocumentId, 
 
   useEffect(() => {
     let active = true;
+    let sync;
     const loadDocument = async () => {
       if (!selectedDocumentId || showDashboard) {
         return;
@@ -176,7 +177,20 @@ export default function DocumentEditor({ session, onLogout, selectedDocumentId, 
         setTitle(loadedTitle);
         setTitleDraft(loadedTitle);
         setTitleStatus("");
-        setContent(document.content || "");
+        sync = createDocumentSync({
+          document, save: saveDocumentContent, load: getDocumentById,
+          storage: window.sessionStorage,
+          storageKey: `collabloop-draft:${session.email}:${document.id}`,
+          onChange: (text, snapshot) => {
+            if (!active) return;
+            setContent(text);
+            setVersionNumber(snapshot.version ?? null);
+            setDocuments((prev) => prev.map((item) => item.id === snapshot.id
+              ? { ...item, ...snapshot } : item));
+          },
+          onStatus: (status) => { if (active) setSyncStatus(status); },
+        });
+        syncRef.current = sync;
         setCollaborators(document.collaborators || []);
         setVersionNumber(document.version ?? null);
         setDocuments((prev) =>
@@ -194,8 +208,12 @@ export default function DocumentEditor({ session, onLogout, selectedDocumentId, 
     };
 
     loadDocument();
-    return () => { active = false; };
-  }, [selectedDocumentId, showDashboard]);
+    return () => {
+      active = false;
+      sync?.close();
+      if (syncRef.current === sync) syncRef.current = null;
+    };
+  }, [selectedDocumentId, showDashboard, session.email]);
 
   useEffect(() => {
     if (!connected || showDashboard || documentError || documentLoading) return;
@@ -204,12 +222,20 @@ export default function DocumentEditor({ session, onLogout, selectedDocumentId, 
   }, [connected, showDashboard, documentError, documentLoading, selectedDocumentId, subscribeToDocument, unsubscribeFromDocument]);
 
   useEffect(() => {
+    if (showDashboard || documentLoading || documentError) return;
+    const refresh = () => syncRef.current?.refresh();
+    refresh();
+    const timer = setInterval(refresh, 8000);
+    window.addEventListener("online", refresh);
+    return () => { clearInterval(timer); window.removeEventListener("online", refresh); };
+  }, [connected, showDashboard, documentLoading, documentError, selectedDocumentId]);
+
+  useEffect(() => {
     if (!accessMessage || handledAccessMessage.current === accessMessage) return;
     handledAccessMessage.current = accessMessage;
     const documentId = accessMessage.documentId;
-    if (selectedDocumentId === documentId) {
-      clearTimeout(debounceTimerRef.current);
-      pendingUpdateRef.current = null;
+    if (selectedDocumentId === documentId && (accessMessage.role == null || accessMessage.role === "VIEWER")) {
+      syncRef.current?.cancel();
     }
     if (accessMessage.role == null) {
       setDocuments((prev) => prev.filter((document) => document.id !== documentId));
@@ -231,33 +257,22 @@ export default function DocumentEditor({ session, onLogout, selectedDocumentId, 
 
   useEffect(() => {
     if (selectedDocumentId && lastMessage && lastMessage.id === selectedDocumentId) {
-      setContent(lastMessage.content || "");
-      setVersionNumber(lastMessage.version ?? versionNumber);
-      setDocuments((prev) => prev.map((document) => document.id === lastMessage.id
-        ? { ...document, ...lastMessage } : document));
+      syncRef.current?.receive(lastMessage);
     }
-  }, [lastMessage, selectedDocumentId, versionNumber]);
+  }, [lastMessage, selectedDocumentId]);
 
   const handleChange = (nextContent) => {
     if (!canEditDocument) {
       return;
     }
 
-    pendingUpdateRef.current = { id: selectedDocumentId, content: nextContent };
+    syncRef.current?.edit(nextContent);
     setContent(nextContent);
 
     if (connected) {
       sendPresenceTyping(selectedDocumentId);
     }
 
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
-    }
-
-    debounceTimerRef.current = setTimeout(() => {
-      if (pendingUpdateRef.current) sendUpdate(pendingUpdateRef.current);
-      pendingUpdateRef.current = null;
-    }, 300);
   };
 
   const handleTitleSubmit = async (event) => {
@@ -296,6 +311,7 @@ export default function DocumentEditor({ session, onLogout, selectedDocumentId, 
       setTitle(updatedDocument.title || nextTitle);
       setTitleDraft(updatedDocument.title || nextTitle);
       setVersionNumber(updatedDocument.version ?? versionNumber);
+      syncRef.current?.receive(updatedDocument);
       setCollaborators(updatedDocument.collaborators || collaborators);
       setTitleStatus("Title saved");
     } catch (renameError) {
@@ -347,8 +363,7 @@ export default function DocumentEditor({ session, onLogout, selectedDocumentId, 
       await deleteDocument(selectedDocumentId);
       setDocuments((prev) => prev.filter((document) => document.id !== selectedDocumentId));
       if (activeDocumentId.current !== selectedDocumentId) return;
-      clearTimeout(debounceTimerRef.current);
-      pendingUpdateRef.current = null;
+      syncRef.current?.cancel();
 
       navigate("workspace", { replace: true });
 
@@ -535,6 +550,13 @@ export default function DocumentEditor({ session, onLogout, selectedDocumentId, 
                 {maximized ? "Restore view" : "Maximize"}
               </button>
             </div>
+            {!showWhiteboard && canEditDocument && (
+              <p className="document-sync-status" role="status">
+                {syncStatus.message}{syncStatus.state === "error" && (
+                  <> <button type="button" onClick={() => syncRef.current?.retry()}>Retry saving</button></>
+                )}
+              </p>
+            )}
             {showWhiteboard ? (
               <Whiteboard key={selectedDocumentId} documentId={selectedDocumentId}
                 userId={session.userId ?? session.id} canEdit={canEditDocument && !deleting} />

@@ -5,6 +5,7 @@ import { useAppNavigation } from "../navigation";
 import {
   createDocument, deleteDocument, eraseWhiteboardStrokes, getDocumentById, getDocumentHistory, getDocuments,
   getWhiteboard, patchDocument, saveWhiteboardStroke, undoWhiteboardStroke,
+  saveDocumentContent,
 } from "../services/documentService";
 
 jest.mock("../services/documentService", () => ({
@@ -12,6 +13,7 @@ jest.mock("../services/documentService", () => ({
   getDocumentHistory: jest.fn(), getDocuments: jest.fn(), patchDocument: jest.fn(), shareDocument: jest.fn(),
   getWhiteboard: jest.fn(), saveWhiteboardStroke: jest.fn(), undoWhiteboardStroke: jest.fn(),
   eraseWhiteboardStrokes: jest.fn(),
+  saveDocumentContent: jest.fn(),
 }));
 const mockSocket = {
   connected: false, sendPresenceViewing: jest.fn(), subscribeToDocument: jest.fn(),
@@ -36,6 +38,11 @@ function DocumentEditor(props) {
 beforeEach(() => {
   window.history.replaceState(null, "", "/?page=workspace");
   jest.clearAllMocks();
+  Object.defineProperty(window, "crypto", { configurable: true, value: webcrypto });
+  window.sessionStorage.clear();
+  saveDocumentContent.mockReset().mockImplementation(async (id, request) => ({
+    id, content: request.content, version: request.baseVersion + 1,
+  }));
   mockSocket.accessMessage = null;
   mockSocket.connected = false;
   mockSocket.presenceMessage = null;
@@ -315,7 +322,7 @@ test("browser Back flushes the pending edit and Forward reopens the document", a
   fireEvent.change(content, { target: { value: "Latest draft" } });
   window.history.back();
   expect(await screen.findByRole("table")).toBeInTheDocument();
-  expect(mockSocket.sendUpdate).toHaveBeenCalledWith({ id: alpha.id, content: "Latest draft" });
+  expect(saveDocumentContent).toHaveBeenCalledWith(alpha.id, expect.objectContaining({ content: "Latest draft", baseVersion: 0 }));
   expect(mockSocket.unsubscribeFromDocument).toHaveBeenCalled();
   window.history.forward();
   expect(await screen.findByLabelText("Document content")).toBeInTheDocument();
@@ -336,7 +343,7 @@ test("flows overflowing text onto the next page and saves continuous text", asyn
     expect(firstPage).toHaveValue("abcde");
     expect(secondPage).toHaveValue("f");
     expect(secondPage).toHaveFocus();
-    await waitFor(() => expect(mockSocket.sendUpdate).toHaveBeenCalledWith({ id: alpha.id, content: "abcdef" }));
+    await waitFor(() => expect(saveDocumentContent).toHaveBeenCalledWith(alpha.id, expect.objectContaining({ content: "abcdef" })));
     fireEvent.change(secondPage, { target: { value: "" } });
     expect(screen.queryByLabelText("Document content, page 2")).not.toBeInTheDocument();
     expect(firstPage).toHaveFocus();
@@ -359,7 +366,7 @@ test("saves a page break through the live editor and merges the pages without lo
   expect(firstPage).toHaveValue("First");
   expect(secondPage).toHaveValue("Second");
   expect(secondPage).toHaveFocus();
-  await waitFor(() => expect(mockSocket.sendUpdate).toHaveBeenCalledWith({ id: alpha.id, content: "First\fSecond" }));
+  await waitFor(() => expect(saveDocumentContent).toHaveBeenCalledWith(alpha.id, expect.objectContaining({ content: "First\fSecond" })));
   fireEvent.click(screen.getByRole("button", { name: "Remove page break" }));
   expect(firstPage).toHaveValue("FirstSecond");
   expect(screen.queryByLabelText("Document content, page 2")).not.toBeInTheDocument();
@@ -384,6 +391,7 @@ test("previews old content without sending edits and returns to the latest live 
   expect(screen.getByLabelText("Document content")).toHaveValue("A newer live update");
   expect(patchDocument).not.toHaveBeenCalled();
   expect(mockSocket.sendUpdate).not.toHaveBeenCalled();
+  expect(saveDocumentContent).not.toHaveBeenCalled();
   mockSocket.lastMessage = null;
 });
 
@@ -393,4 +401,47 @@ test("a history failure does not block editing the live document", async () => {
   fireEvent.click(await screen.findByRole("button", { name: alpha.title }));
   expect(await screen.findByLabelText("Document content")).toBeEnabled();
   expect(await screen.findByRole("alert")).toHaveTextContent("Unable to load history");
+});
+
+test("a collaborator keeps typing and their caret while a slow save is acknowledged", async () => {
+  mockSocket.connected = true;
+  getDocumentById.mockResolvedValue({ ...beta, content: "Start", version: 0 });
+  let acknowledge;
+  saveDocumentContent.mockImplementationOnce(() => new Promise(resolve => { acknowledge = resolve; }));
+  const { rerender } = render(<DocumentEditor session={session} onLogout={jest.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: beta.title }));
+  const field = await screen.findByLabelText("Document content");
+  act(() => field.focus());
+  fireEvent.change(field, { target: { value: "Start A", selectionStart: 7, selectionEnd: 7 } });
+  await waitFor(() => expect(saveDocumentContent).toHaveBeenCalledTimes(1));
+  fireEvent.change(field, { target: { value: "Start ABC", selectionStart: 9, selectionEnd: 9 } });
+  mockSocket.lastMessage = { id: beta.id, content: "Start A", version: 1 };
+  rerender(<DocumentEditor session={session} onLogout={jest.fn()} />);
+  expect(field).toHaveValue("Start ABC");
+  await act(async () => acknowledge(mockSocket.lastMessage));
+  expect(field).toHaveValue("Start ABC");
+  expect(field.selectionStart).toBe(9);
+  await waitFor(() => expect(saveDocumentContent).toHaveBeenCalledTimes(2));
+  expect(saveDocumentContent.mock.calls[1][1]).toMatchObject({ content: "Start ABC", baseVersion: 1 });
+  mockSocket.lastMessage = { id: beta.id, content: "Prefix Start ABC", version: 3 };
+  rerender(<DocumentEditor session={session} onLogout={jest.fn()} />);
+  await waitFor(() => expect(field).toHaveValue("Prefix Start ABC"));
+  expect(field.selectionStart).toBe(16);
+});
+
+test("a remote edit does not remove text entered with an IME", async () => {
+  getDocumentById.mockResolvedValue({ ...beta, content: "Hello", version: 0 });
+  const { rerender } = render(<DocumentEditor session={session} onLogout={jest.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: beta.title }));
+  const field = await screen.findByLabelText("Document content");
+  act(() => field.focus());
+  fireEvent.compositionStart(field);
+  fireEvent.change(field, { target: { value: "Hello世界", selectionStart: 7, selectionEnd: 7 } });
+  mockSocket.lastMessage = { id: beta.id, content: "Hi Hello", version: 1 };
+  rerender(<DocumentEditor session={session} onLogout={jest.fn()} />);
+  expect(field).toHaveValue("Hello世界");
+  fireEvent.compositionEnd(field);
+  expect(field).toHaveValue("Hi Hello世界");
+  await waitFor(() => expect(saveDocumentContent).toHaveBeenCalledWith(beta.id,
+    expect.objectContaining({ content: "Hi Hello世界", baseVersion: 1 })));
 });

@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { PAGE_BREAK } from "../documentFormat";
 import { paginateDocument } from "../documentPagination";
+import { mapTextOffset, mergeDocumentText } from "../documentSync";
 
 export default function DocumentPages({ content, onChange, readOnly = false }) {
   const text = content.replace(/\r\n?/g, "\n");
@@ -12,6 +13,7 @@ export default function DocumentPages({ content, onChange, readOnly = false }) {
   const pendingFocus = useRef(null);
   const lastFocusedPage = useRef(null);
   const renderedPages = useRef(pages);
+  const renderedText = useRef(text);
   const preview = !onChange;
   const firstPagePlaceholder = readOnly ? "Viewer access is read-only." : "Start writing here…";
 
@@ -31,8 +33,8 @@ export default function DocumentPages({ content, onChange, readOnly = false }) {
     const previousPage = renderedPages.current[currentIndex];
     if (!pendingFocus.current && field && field === document.activeElement && previousPage) {
       pendingFocus.current = {
-        start: previousPage.start + field.selectionStart,
-        end: previousPage.start + field.selectionEnd,
+        start: mapTextOffset(renderedText.current, text, previousPage.start + field.selectionStart),
+        end: mapTextOffset(renderedText.current, text, previousPage.start + field.selectionEnd),
         preferNext: field.selectionStart === 0,
       };
     }
@@ -43,6 +45,7 @@ export default function DocumentPages({ content, onChange, readOnly = false }) {
       return measurement.scrollHeight <= measurement.clientHeight;
     }));
     measurement.value = "";
+    renderedText.current = text;
   }, [text, size, composition]);
 
   useLayoutEffect(() => {
@@ -140,13 +143,20 @@ export default function DocumentPages({ content, onChange, readOnly = false }) {
                   value={composition?.index === index ? composition.value : page.text}
                   onFocus={() => { lastFocusedPage.current = index; }}
                   onKeyDown={(event) => handleBoundaryKey(event, page, index)}
-                  onCompositionStart={(event) => setComposition({ index, value: event.currentTarget.value })}
+                  onCompositionStart={(event) => setComposition({ index, value: event.currentTarget.value,
+                    base: text, start: page.start, end: page.end })}
                   onCompositionEnd={(event) => {
+                    const draft = composition;
                     setComposition(null);
-                    editPage(page, event.currentTarget);
+                    if (!draft) return;
+                    const local = draft.base.slice(0, draft.start) + event.currentTarget.value + draft.base.slice(draft.end);
+                    const merged = mergeDocumentText(draft.base, local, text);
+                    const caret = mapTextOffset(local, merged, draft.start + event.currentTarget.selectionStart);
+                    pendingFocus.current = { start: caret, end: caret, preferNext: true };
+                    onChange(merged);
                   }}
                   onChange={(event) => {
-                    if (composition) setComposition({ index, value: event.currentTarget.value });
+                    if (composition) setComposition({ ...composition, value: event.currentTarget.value });
                     else editPage(page, event.currentTarget);
                   }}
                   disabled={readOnly}

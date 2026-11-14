@@ -19,6 +19,13 @@ import java.util.Map;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    @ExceptionHandler({org.springframework.dao.OptimisticLockingFailureException.class,
+            jakarta.persistence.OptimisticLockException.class})
+    public ResponseEntity<ApiErrorResponse> handleStaleEdit(Exception ex, HttpServletRequest request) {
+        return buildErrorResponse(HttpStatus.CONFLICT,
+                "The document changed. Merge the latest version before saving again.", request, null);
+    }
+
     @ExceptionHandler(AuthRateLimitException.class)
     public ResponseEntity<ApiErrorResponse> handleAuthRateLimit(AuthRateLimitException ex, HttpServletRequest request) {
         var result = buildErrorResponse(HttpStatus.TOO_MANY_REQUESTS, ex.getMessage(), request, null);

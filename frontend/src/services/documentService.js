@@ -60,6 +60,18 @@ export function patchDocument(documentId, payload) {
   });
 }
 
+export async function saveDocumentContent(documentId, payload) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    return await fetchWithAuth(`/documents/${documentId}/content`, {
+      method: "PUT", body: JSON.stringify(payload), signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export function shareDocument(documentId, email, role) {
   return fetchWithAuth(`/documents/${documentId}/share`, {
     method: "POST",

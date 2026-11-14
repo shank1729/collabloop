@@ -3,6 +3,7 @@ package com.realtimecollab.entity;
 import jakarta.persistence.*;
 
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 @Entity
 public class DocumentVersion {
@@ -26,6 +27,11 @@ public class DocumentVersion {
 
     @Column(nullable = false)
     private LocalDateTime editedAt;
+
+    private UUID clientEditId;
+
+    public UUID getClientEditId() { return clientEditId; }
+    public void setClientEditId(UUID clientEditId) { this.clientEditId = clientEditId; }
 
     public Long getId() {
         return id;

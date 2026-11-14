@@ -941,3 +941,9 @@ body {
     align-items: stretch;
   }
 }
+.document-sync-status {
+  margin: 0;
+  padding: 0.6rem 1rem;
+  color: #536760;
+  font-size: 0.8rem;
+}
