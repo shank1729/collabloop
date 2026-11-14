@@ -1,5 +1,7 @@
 # CollabLoop
 
+[Open CollabLoop — Live Demo](https://collabloop.129-225-102-84.sslip.io/)
+
 A real-time workspace for writing documents and explaining ideas on a shared whiteboard, built with Spring Boot and React.
 
 The backend lives at the repository root. The React frontend lives in [`frontend/`](frontend/).
